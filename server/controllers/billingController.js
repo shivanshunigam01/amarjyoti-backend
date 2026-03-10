@@ -1,38 +1,73 @@
-const XLSX = require('xlsx');
-const BillingRecord = require('../models/BillingRecord');
-const Payment = require('../models/Payment');
-const catchAsync = require('../utils/catchAsync');
-const AppError = require('../utils/appError');
-const { parseExcelDate, toISODate } = require('../utils/date');
-const { computePaymentStatus } = require('../utils/payment');
+const XLSX = require("xlsx");
+const BillingRecord = require("../models/BillingRecord");
+const Payment = require("../models/Payment");
+const catchAsync = require("../utils/catchAsync");
+const AppError = require("../utils/appError");
+const { parseExcelDate, toISODate } = require("../utils/date");
+const { computePaymentStatus } = require("../utils/payment");
 
 function normalizeRow(row) {
+  const cleanNumber = (val) =>
+    Number(
+      String(val || "0")
+        .replace(/,/g, "")
+        .trim(),
+    );
+
   return {
-    ro_no: String(row['RO No'] || row['RO NO'] || row.ro_no || '').trim(),
-    bill_no: String(row['Bill No'] || row['BILL NO'] || row.bill_no || '').trim(),
-    bill_date: parseExcelDate(row['Bill Date'] || row.bill_date),
-    customer_name: String(row['Customer Name'] || row.customer_name || '').trim(),
-    vin: String(row['VIN'] || row.vin || '').trim(),
-    vehicle_reg_no: String(row['Vehicle Reg No'] || row.vehicle_reg_no || '').trim(),
-    model: String(row['Model'] || row.model || '').trim(),
-    ro_date: parseExcelDate(row['RO Date'] || row.ro_date),
-    service_advisor: String(row['Service Advisor'] || row.service_advisor || '').trim(),
-    total_amt: Number(row['Total Amt'] || row.total_amt || 0),
-    ins_comp_name: String(row['Ins. Comp Name'] || row.ins_comp_name || 'No Insurance Claim').trim() || 'No Insurance Claim',
+    ro_no: String(
+      row["RO No"] || row["RO NO"] || row["Ro No"] || row.ro_no || "",
+    ).trim(),
+
+    bill_no: String(
+      row["Bill No"] || row["BILL NO"] || row["BillNo"] || row.bill_no || "",
+    ).trim(),
+
+    bill_date: parseExcelDate(
+      row["Bill Date"] || row["BillDate"] || row.bill_date,
+    ),
+
+    customer_name: String(
+      row["Customer Name"] || row["Customer"] || row.customer_name || "",
+    ).trim(),
+
+    vin: String(row["VIN"] || row.vin || "").trim(),
+
+    vehicle_reg_no: String(
+      row["Vehicle Reg No"] || row["Vehicle No"] || row.vehicle_reg_no || "",
+    ).trim(),
+
+    model: String(row["Model"] || row.model || "").trim(),
+
+    ro_date: parseExcelDate(row["RO Date"] || row["RODate"] || row.ro_date),
+
+    service_advisor: String(
+      row["Service Advisor"] || row["Advisor"] || row.service_advisor || "",
+    ).trim(),
+
+    total_amt: cleanNumber(row["Total Amt"] || row.total_amt),
+
+    ins_comp_name:
+      String(
+        row["Ins. Comp Name"] ||
+          row["Insurance Company"] ||
+          row.ins_comp_name ||
+          "No Insurance Claim",
+      ).trim() || "No Insurance Claim",
   };
 }
 
 exports.uploadBilling = catchAsync(async (req, res) => {
   if (!req.file) {
-    throw new AppError('Please upload an Excel or CSV file', 400);
+    throw new AppError("Please upload an Excel or CSV file", 400);
   }
 
-  const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+  const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+  const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
 
   if (!rows.length) {
-    throw new AppError('Uploaded file is empty', 400);
+    throw new AppError("Uploaded file is empty", 400);
   }
 
   const duplicates = [];
@@ -45,41 +80,49 @@ exports.uploadBilling = catchAsync(async (req, res) => {
     const item = normalizeRow(rows[index]);
 
     if (!item.ro_no) {
-      errors.push({ row: rowNo, message: 'Missing RO No — skipped' });
+      errors.push({ row: rowNo, message: "Missing RO No — skipped" });
       continue;
     }
 
-    if (!item.bill_no || !item.bill_date || !item.customer_name || Number.isNaN(item.total_amt)) {
-      errors.push({ row: rowNo, message: 'Missing required fields — skipped' });
+    if (
+      !item.bill_no ||
+      !item.bill_date ||
+      !item.customer_name ||
+      Number.isNaN(item.total_amt)
+    ) {
+      errors.push({ row: rowNo, message: "Missing required fields — skipped" });
       continue;
     }
 
     docsToInsert.push({ ...item, branch });
   }
 
-  const roNos = docsToInsert.map((doc) => doc.ro_no);
-  const existing = await BillingRecord.find({ branch, ro_no: { $in: roNos } }).select('ro_no');
-  const existingSet = new Set(existing.map((doc) => doc.ro_no));
-
-  const filteredDocs = docsToInsert.filter((doc) => {
-    if (existingSet.has(doc.ro_no)) {
-      duplicates.push({ ro_no: doc.ro_no, message: 'Duplicate — data unchanged' });
-      return false;
-    }
-    return true;
-  });
-
   let imported = 0;
-  if (filteredDocs.length) {
-    await BillingRecord.insertMany(filteredDocs, { ordered: false });
-    imported = filteredDocs.length;
+  let updated = 0;
+
+  for (const doc of docsToInsert) {
+    const existing = await BillingRecord.findOne({
+      branch,
+      ro_no: doc.ro_no,
+    });
+
+    if (existing) {
+      await BillingRecord.updateOne(
+        { branch, ro_no: doc.ro_no },
+        { $set: doc },
+      );
+      updated++;
+    } else {
+      await BillingRecord.create(doc);
+      imported++;
+    }
   }
 
   res.status(200).json({
     success: true,
     imported,
-    skipped: duplicates.length + errors.length,
-    duplicates,
+    updated,
+    skipped: errors.length,
     errors,
   });
 });
@@ -93,22 +136,22 @@ exports.listRecords = catchAsync(async (req, res) => {
     from_date,
     to_date,
     service_advisor,
-    sort_by = 'bill_date',
-    sort_order = 'desc',
+    sort_by = "bill_date",
+    sort_order = "desc",
   } = req.query;
 
   const filter = { ...req.branchFilter };
 
   if (search) {
     filter.$or = [
-      { ro_no: { $regex: search, $options: 'i' } },
-      { customer_name: { $regex: search, $options: 'i' } },
-      { vehicle_reg_no: { $regex: search, $options: 'i' } },
+      { ro_no: { $regex: search, $options: "i" } },
+      { customer_name: { $regex: search, $options: "i" } },
+      { vehicle_reg_no: { $regex: search, $options: "i" } },
     ];
   }
 
   if (service_advisor) {
-    filter.service_advisor = { $regex: service_advisor, $options: 'i' };
+    filter.service_advisor = { $regex: service_advisor, $options: "i" };
   }
 
   if (from_date || to_date) {
@@ -124,7 +167,7 @@ exports.listRecords = catchAsync(async (req, res) => {
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
   const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
   const skip = (safePage - 1) * safeLimit;
-  const sort = { [sort_by]: sort_order === 'asc' ? 1 : -1 };
+  const sort = { [sort_by]: sort_order === "asc" ? 1 : -1 };
 
   const [records, total, payments] = await Promise.all([
     BillingRecord.find(filter).sort(sort).skip(skip).limit(safeLimit).lean(),
@@ -132,11 +175,17 @@ exports.listRecords = catchAsync(async (req, res) => {
     Payment.find(req.branchFilter).lean(),
   ]);
 
-  const paymentMap = new Map(payments.map((p) => [`${p.ro_no}__${p.branch}`, p]));
+  const paymentMap = new Map(
+    payments.map((p) => [`${p.ro_no}__${p.branch}`, p]),
+  );
 
   let enriched = records.map((record) => {
     const payment = paymentMap.get(`${record.ro_no}__${record.branch}`);
-    const summary = computePaymentStatus(record.total_amt, payment?.customer_amount_paid, payment?.insurance_amount);
+    const summary = computePaymentStatus(
+      record.total_amt,
+      payment?.customer_amount_paid,
+      payment?.insurance_amount,
+    );
 
     return {
       id: record._id,
@@ -177,11 +226,21 @@ exports.listRecords = catchAsync(async (req, res) => {
 });
 
 exports.getRecord = catchAsync(async (req, res) => {
-  const record = await BillingRecord.findOne({ ...req.branchFilter, ro_no: req.params.ro_no }).lean();
-  if (!record) throw new AppError('Billing record not found', 404);
+  const record = await BillingRecord.findOne({
+    ...req.branchFilter,
+    ro_no: req.params.ro_no,
+  }).lean();
+  if (!record) throw new AppError("Billing record not found", 404);
 
-  const payment = await Payment.findOne({ ...req.branchFilter, ro_no: req.params.ro_no }).lean();
-  const summary = computePaymentStatus(record.total_amt, payment?.customer_amount_paid, payment?.insurance_amount);
+  const payment = await Payment.findOne({
+    ...req.branchFilter,
+    ro_no: req.params.ro_no,
+  }).lean();
+  const summary = computePaymentStatus(
+    record.total_amt,
+    payment?.customer_amount_paid,
+    payment?.insurance_amount,
+  );
 
   res.status(200).json({
     success: true,
@@ -203,22 +262,22 @@ exports.getRecord = catchAsync(async (req, res) => {
     },
     payment: {
       customer_payment: {
-        mode: payment?.customer_payment_mode || '',
+        mode: payment?.customer_payment_mode || "",
         amount_paid: payment?.customer_amount_paid || 0,
         payment_date: toISODate(payment?.customer_payment_date),
-        txn_id: payment?.customer_txn_id || '',
+        txn_id: payment?.customer_txn_id || "",
       },
       insurance_payment: {
         applicable: payment?.insurance_applicable || false,
-        company: payment?.insurance_company || '',
+        company: payment?.insurance_company || "",
         amount: payment?.insurance_amount || 0,
         payment_date: toISODate(payment?.insurance_payment_date),
-        reference_no: payment?.insurance_reference_no || '',
+        reference_no: payment?.insurance_reference_no || "",
       },
       total_collected: summary.total_collected,
       balance: summary.balance,
       status: summary.status,
-      notes: payment?.notes || '',
+      notes: payment?.notes || "",
     },
   });
 });
