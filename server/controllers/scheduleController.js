@@ -1,6 +1,6 @@
 // controllers/scheduleController.js
 const Schedule = require('../models/Schedule');
-const Billing = require('../models/Billing');
+const Billing = require('../models/BillingRecord');
 const Payment = require('../models/Payment');
 
 // GET /api/v1/schedules
