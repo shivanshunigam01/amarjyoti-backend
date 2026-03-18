@@ -10,7 +10,6 @@ const {
   clearAll,
 } = require('../controllers/billingController');
 const XLSX = require('xlsx');
-const upload = multer({ storage: multer.memoryStorage() });
 const BillingRecord = require("../models/BillingRecord");
 const Payment = require("../models/Payment");
 
