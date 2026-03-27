@@ -14,6 +14,9 @@ const BillingRecordSchema = new mongoose.Schema(
     total_amt: { type: Number, required: true, min: 0 },
     ins_comp_name: { type: String, default: 'No Insurance Claim', trim: true },
     branch: { type: String, enum: ['branch1', 'branch2'], required: true },
+     paid_amount: { type: Number, default: 0 },
+    remaining_amount: { type: Number, default: 0 },
+    payment_mode: { type: String, default: '' },
   },
   { timestamps: true }
 );

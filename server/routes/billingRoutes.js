@@ -48,8 +48,14 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // 🔧 Helpers
-  const clean = (val) =>
+  // 🔥 STRONG CLEAN FUNCTION (KEY FIX)
+  const cleanRO = (val) =>
+    String(val || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '') // removes space, dash, newline
+      .trim();
+
+  const cleanText = (val) =>
     String(val || '').trim().toUpperCase();
 
   const parseNumber = (val) =>
@@ -63,9 +69,25 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    const ro_no = clean(row['RO No']);
-    const paid_amt = parseNumber(row['Paid Amount'] || row['Amount']);
-    const payment_mode = clean(row['Payment Mode']);
+    // 🔥 FLEXIBLE COLUMN READ
+    const roRaw =
+      row['RO No'] ||
+      row['RO NO'] ||
+      row['Ro No'] ||
+      row['RO Number'];
+
+    const ro_no = cleanRO(roRaw);
+
+    const paid_amt = parseNumber(
+      row['Paid Amount'] ||
+      row['Amount'] ||
+      row['Payment Amount']
+    );
+
+    const payment_mode = cleanText(
+      row['Payment Mode'] ||
+      row['Mode']
+    );
 
     if (!ro_no) {
       notFound.push({
@@ -75,9 +97,10 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
+    // 🔥 CASE-INSENSITIVE MATCH (BIG FIX)
     const record = await BillingRecord.findOne({
-      ro_no,
       branch,
+      ro_no: { $regex: `^${ro_no}$`, $options: 'i' },
     });
 
     if (!record) {
@@ -89,13 +112,13 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    // 🔥 CALCULATION
+    // 🔥 PAYMENT CALCULATION
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
 
     updates.push({
       updateOne: {
-        filter: { ro_no, branch },
+        filter: { _id: record._id },
         update: {
           $set: {
             paid_amount: newPaid,
@@ -113,7 +136,7 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     });
   }
 
-  // 🚀 Bulk update (fast)
+  // 🚀 BULK UPDATE
   if (updates.length) {
     await BillingRecord.bulkWrite(updates);
   }
@@ -126,7 +149,6 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     notFoundDetails: notFound,
   });
 });
-
 
 router.use(auth, branchScope);
 router.post('/upload', upload.single('file'), uploadBilling);
