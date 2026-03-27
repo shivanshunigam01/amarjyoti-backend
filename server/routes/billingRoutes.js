@@ -173,6 +173,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   if (updates.length) {
     await BillingRecord.bulkWrite(updates);
   }
+  console.log(Object.keys(rows[0]));
 
   res.status(200).json({
     success: true,
