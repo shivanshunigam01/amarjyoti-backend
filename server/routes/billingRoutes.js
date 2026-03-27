@@ -35,7 +35,9 @@ const upload = multer({
 
 
 // Add to billing routes
-exports.uploadPaymentSheet = catchAsync(async (req, res) => {
+
+// 🔥 PAYMENT UPLOAD CONTROLLER (FIXED)
+const uploadPaymentSheet = catchAsync(async (req, res) => {
   if (!req.file) {
     throw new AppError('Please upload payment sheet', 400);
   }
@@ -50,11 +52,10 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // 🔥 STRONG CLEAN FUNCTION (KEY FIX)
   const cleanRO = (val) =>
     String(val || '')
       .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '') // removes space, dash, newline
+      .replace(/[^A-Z0-9]/g, '')
       .trim();
 
   const cleanText = (val) =>
@@ -71,7 +72,6 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    // 🔥 FLEXIBLE COLUMN READ
     const roRaw =
       row['RO No'] ||
       row['RO NO'] ||
@@ -99,7 +99,6 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    // 🔥 CASE-INSENSITIVE MATCH (BIG FIX)
     const record = await BillingRecord.findOne({
       branch,
       ro_no: { $regex: `^${ro_no}$`, $options: 'i' },
@@ -114,7 +113,6 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    // 🔥 PAYMENT CALCULATION
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
 
@@ -138,12 +136,10 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     });
   }
 
-  // 🚀 BULK UPDATE
   if (updates.length) {
     await BillingRecord.bulkWrite(updates);
   }
-
-  res.status(200).json({
+    res.status(200).json({
     success: true,
     totalRows: rows.length,
     updated: processed.length,
@@ -151,6 +147,7 @@ exports.uploadPaymentSheet = catchAsync(async (req, res) => {
     notFoundDetails: notFound,
   });
 });
+
 
 router.use(auth, branchScope);
 router.post('/upload', upload.single('file'), uploadBilling);
