@@ -33,85 +33,98 @@ const upload = multer({
 
 
 // Add to billing routes
-router.post('/upload-payments', auth, upload.single('file'), async (req, res) => {
-  try {
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
+exports.uploadPaymentSheet = catchAsync(async (req, res) => {
+  if (!req.file) {
+    throw new AppError('Please upload payment sheet', 400);
+  }
 
-    const results = [];
-    const errors = [];
-    let updated = 0;
-    let skipped = 0;
+  const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const roNo = String(row['RO No'] || '').trim();
-      const customerPayment = parseFloat(row['Customer Payment']) || 0;
-      const insurancePayment = parseFloat(row['Insurance Payment']) || 0;
+  if (!rows.length) {
+    throw new AppError('Uploaded file is empty', 400);
+  }
 
-      if (!roNo) {
-        errors.push({ row: i + 2, message: 'Missing RO No' });
-        skipped++;
-        continue;
-      }
+  const branch = req.user.branch;
 
-      if (customerPayment === 0 && insurancePayment === 0) {
-        skipped++;
-        continue;
-      }
+  // 🔧 Helpers
+  const clean = (val) =>
+    String(val || '').trim().toUpperCase();
 
-      // Find billing record
-      const billing = await BillingRecord.findOne({ 
-        ro_no: roNo, 
-        branch: req.user.branch 
+  const parseNumber = (val) =>
+    Number(String(val || '').replace(/,/g, '')) || 0;
+
+  const updates = [];
+  const notFound = [];
+  const processed = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNo = i + 2;
+
+    const ro_no = clean(row['RO No']);
+    const paid_amt = parseNumber(row['Paid Amount'] || row['Amount']);
+    const payment_mode = clean(row['Payment Mode']);
+
+    if (!ro_no) {
+      notFound.push({
+        row: rowNo,
+        reason: 'RO No missing',
       });
-
-      if (!billing) {
-        errors.push({ row: i + 2, ro_no: roNo, message: 'RO not found in billing records' });
-        skipped++;
-        continue;
-      }
-
-      // Find or create payment
-      let payment = await Payment.findOne({ ro_no: roNo, branch: req.user.branch });
-      if (!payment) {
-        payment = new Payment({ ro_no: roNo, branch: req.user.branch });
-      }
-
-      // Accumulate payments
-      payment.customer_amount_paid = (payment.customer_amount_paid || 0) + customerPayment;
-      if (insurancePayment > 0) {
-        payment.insurance_applicable = true;
-        payment.insurance_amount = (payment.insurance_amount || 0) + insurancePayment;
-      }
-
-      // Recalculate status
-      const totalPaid = (payment.customer_amount_paid || 0) + (payment.insurance_amount || 0);
-      if (totalPaid >= billing.total_amt) {
-        payment.payment_status = 'Completed';
-      } else if (totalPaid > 0) {
-        payment.payment_status = 'Partial';
-      } else {
-        payment.payment_status = 'Pending';
-      }
-
-      payment.customer_payment_date = new Date().toISOString();
-      await payment.save();
-
-      results.push({
-        ro_no: roNo,
-        customer_added: customerPayment,
-        insurance_added: insurancePayment,
-        status: payment.payment_status,
-      });
-      updated++;
+      continue;
     }
 
-    res.json({ success: true, updated, skipped, results, errors });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    const record = await BillingRecord.findOne({
+      ro_no,
+      branch,
+    });
+
+    if (!record) {
+      notFound.push({
+        row: rowNo,
+        ro_no,
+        reason: 'RO not found in billing data',
+      });
+      continue;
+    }
+
+    // 🔥 CALCULATION
+    const newPaid = (record.paid_amount || 0) + paid_amt;
+    const remaining = (record.total_amt || 0) - newPaid;
+
+    updates.push({
+      updateOne: {
+        filter: { ro_no, branch },
+        update: {
+          $set: {
+            paid_amount: newPaid,
+            remaining_amount: remaining < 0 ? 0 : remaining,
+            payment_mode: payment_mode || record.payment_mode,
+          },
+        },
+      },
+    });
+
+    processed.push({
+      row: rowNo,
+      ro_no,
+      paid_amt,
+    });
   }
+
+  // 🚀 Bulk update (fast)
+  if (updates.length) {
+    await BillingRecord.bulkWrite(updates);
+  }
+
+  res.status(200).json({
+    success: true,
+    totalRows: rows.length,
+    updated: processed.length,
+    notFound: notFound.length,
+    notFoundDetails: notFound,
+  });
 });
 
 
