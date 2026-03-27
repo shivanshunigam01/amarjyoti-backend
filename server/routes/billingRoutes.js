@@ -33,6 +33,24 @@ const upload = multer({
 });
 
 
+const getValueByKey = (row, possibleKeys) => {
+  const keys = Object.keys(row);
+
+  for (const key of keys) {
+    const normalizedKey = key
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+
+    for (const possible of possibleKeys) {
+      if (normalizedKey.includes(possible)) {
+        return row[key];
+      }
+    }
+  }
+
+  return '';
+};
+
 
 // Add to billing routes
 
@@ -52,6 +70,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
+  // 🔥 CLEANERS
   const cleanRO = (val) =>
     String(val || '')
       .toUpperCase()
@@ -64,6 +83,25 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const parseNumber = (val) =>
     Number(String(val || '').replace(/,/g, '')) || 0;
 
+  // 🔥 DYNAMIC KEY FINDER (MAIN FIX)
+  const getValueByKey = (row, possibleKeys) => {
+    const keys = Object.keys(row);
+
+    for (const key of keys) {
+      const normalizedKey = key
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      for (const possible of possibleKeys) {
+        if (normalizedKey.includes(possible)) {
+          return row[key];
+        }
+      }
+    }
+
+    return '';
+  };
+
   const updates = [];
   const notFound = [];
   const processed = [];
@@ -72,36 +110,30 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    const roRaw =
-      row['RO No'] ||
-      row['RO NO'] ||
-      row['Ro No'] ||
-      row['RO Number'];
-
+    // 🔥 FLEXIBLE COLUMN READ
+    const roRaw = getValueByKey(row, ['rono', 'ronumber', 'ro']);
     const ro_no = cleanRO(roRaw);
 
     const paid_amt = parseNumber(
-      row['Paid Amount'] ||
-      row['Amount'] ||
-      row['Payment Amount']
+      getValueByKey(row, ['paidamount', 'amount', 'paymentamount'])
     );
 
     const payment_mode = cleanText(
-      row['Payment Mode'] ||
-      row['Mode']
+      getValueByKey(row, ['paymentmode', 'mode'])
     );
 
     if (!ro_no) {
       notFound.push({
         row: rowNo,
-        reason: 'RO No missing',
+        reason: 'RO No missing (header mismatch)',
       });
       continue;
     }
 
+    // 🔥 FAST MATCH (NO REGEX NOW)
     const record = await BillingRecord.findOne({
       branch,
-      ro_no: { $regex: `^${ro_no}$`, $options: 'i' },
+      ro_no,
     });
 
     if (!record) {
@@ -113,6 +145,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
+    // 🔥 PAYMENT CALCULATION
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
 
@@ -136,10 +169,12 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     });
   }
 
+  // 🚀 BULK UPDATE
   if (updates.length) {
     await BillingRecord.bulkWrite(updates);
   }
-    res.status(200).json({
+
+  res.status(200).json({
     success: true,
     totalRows: rows.length,
     updated: processed.length,
@@ -147,7 +182,6 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     notFoundDetails: notFound,
   });
 });
-
 
 router.use(auth, branchScope);
 router.post('/upload', upload.single('file'), uploadBilling);
