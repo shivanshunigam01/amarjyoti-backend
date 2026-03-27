@@ -75,11 +75,18 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const branch = req.user.branch;
 
   // 🔥 HELPERS
-  const cleanRO = (val) =>
-    String(val || '')
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
-      .trim();
+  const extractRONumber = (val) => {
+    if (!val) return '';
+
+    const str = String(val).toUpperCase().trim();
+
+    // 🔥 Convert Rxxxxx → ROxxxxx
+    if (/^R[0-9]+$/.test(str)) {
+      return 'RO' + str.slice(1);
+    }
+
+    return str.replace(/[^A-Z0-9]/g, '');
+  };
 
   const parseNumber = (val) =>
     Number(String(val || '').replace(/,/g, '')) || 0;
@@ -114,29 +121,21 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    // ✅ STRICT KEYS (IMPORTANT FIX)
+    // 🔥 GET RO NUMBER
     const roRaw = getValueByKey(row, ['ronumber', 'ro']);
-    const extractRONumber = (val) => {
-  if (!val) return '';
+    const ro_no = extractRONumber(roRaw);
 
-  const str = String(val).toUpperCase().trim();
-fv
-  // 🔥 FIX: Convert R → RO
-  if (/^R[0-9]+$/.test(str)) {
-    return 'RO' + str.slice(1);
-  }
+    // 🔥 DEBUG (REMOVE LATER)
+    console.log("RAW:", roRaw, "=> CLEAN:", ro_no);
 
-  return str.replace(/[^A-Z0-9]/g, '');
-};
-
-const ro_no = extractRONumber(roRaw);
-
+    // 🔥 GET AMOUNT
     const paid_amt = parseNumber(
-      getValueByKey(row, ['amountpaid', 'paymentamount'])
+      getValueByKey(row, ['amountpaid', 'paymentamount', 'amount'])
     );
 
+    // 🔥 GET PAYMENT MODE
     const payment_mode = cleanText(
-      getValueByKey(row, ['paymentmode'])
+      getValueByKey(row, ['paymentmode', 'mode'])
     );
 
     if (!ro_no) {
@@ -157,12 +156,12 @@ const ro_no = extractRONumber(roRaw);
       notFound.push({
         row: rowNo,
         ro_no,
-        reason: 'RO not found',
+        reason: 'RO not found in billing',
       });
       continue;
     }
 
-    // 🔥 CALCULATE
+    // 🔥 CALCULATE VALUES
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
 
@@ -180,7 +179,7 @@ const ro_no = extractRONumber(roRaw);
       },
     });
 
-    // ✅ UPSERT PAYMENT COLLECTION (VERY IMPORTANT)
+    // ✅ UPSERT PAYMENT COLLECTION
     paymentUpdates.push({
       updateOne: {
         filter: { ro_no, branch },
@@ -213,7 +212,6 @@ const ro_no = extractRONumber(roRaw);
     await Payment.bulkWrite(paymentUpdates);
   }
 
-  console.log("RAW:", roRaw, "=> CLEAN:", ro_no);
   res.status(200).json({
     success: true,
     totalRows: rows.length,
