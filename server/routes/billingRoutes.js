@@ -62,10 +62,11 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
   const rows = XLSX.utils.sheet_to_json(sheet, {
-  defval: '',
-  range: 1, // 🔥 skip first row (MAIN FIX)
-});
+    defval: '',
+    range: 1, // skip header row
+  });
 
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
@@ -73,20 +74,19 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // 🔥 CLEANERS
+  // 🔥 HELPERS
   const cleanRO = (val) =>
     String(val || '')
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, '')
       .trim();
 
-  const cleanText = (val) =>
-    String(val || '').trim().toUpperCase();
-
   const parseNumber = (val) =>
     Number(String(val || '').replace(/,/g, '')) || 0;
 
-  // 🔥 DYNAMIC KEY FINDER (MAIN FIX)
+  const cleanText = (val) =>
+    String(val || '').trim().toUpperCase();
+
   const getValueByKey = (row, possibleKeys) => {
     const keys = Object.keys(row);
 
@@ -101,11 +101,12 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
         }
       }
     }
-
     return '';
   };
 
-  const updates = [];
+  const billingUpdates = [];
+  const paymentUpdates = [];
+
   const notFound = [];
   const processed = [];
 
@@ -113,27 +114,27 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    // 🔥 FLEXIBLE COLUMN READ
-    const roRaw = getValueByKey(row, ['rono', 'ronumber', 'ro']);
+    // ✅ STRICT KEYS (IMPORTANT FIX)
+    const roRaw = getValueByKey(row, ['ronumber']);
     const ro_no = cleanRO(roRaw);
 
     const paid_amt = parseNumber(
-      getValueByKey(row, ['paidamount', 'amount', 'paymentamount'])
+      getValueByKey(row, ['amountpaid', 'paymentamount'])
     );
 
     const payment_mode = cleanText(
-      getValueByKey(row, ['paymentmode', 'mode'])
+      getValueByKey(row, ['paymentmode'])
     );
 
     if (!ro_no) {
       notFound.push({
         row: rowNo,
-        reason: 'RO No missing (header mismatch)',
+        reason: 'RO missing / header mismatch',
       });
       continue;
     }
 
-    // 🔥 FAST MATCH (NO REGEX NOW)
+    // 🔥 FIND BILLING RECORD
     const record = await BillingRecord.findOne({
       branch,
       ro_no,
@@ -143,16 +144,17 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       notFound.push({
         row: rowNo,
         ro_no,
-        reason: 'RO not found in billing data',
+        reason: 'RO not found',
       });
       continue;
     }
 
-    // 🔥 PAYMENT CALCULATION
+    // 🔥 CALCULATE
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
 
-    updates.push({
+    // ✅ UPDATE BILLING
+    billingUpdates.push({
       updateOne: {
         filter: { _id: record._id },
         update: {
@@ -165,6 +167,23 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       },
     });
 
+    // ✅ UPSERT PAYMENT COLLECTION (VERY IMPORTANT)
+    paymentUpdates.push({
+      updateOne: {
+        filter: { ro_no, branch },
+        update: {
+          $set: {
+            ro_no,
+            branch,
+            customer_amount_paid: paid_amt,
+            customer_payment_mode: payment_mode,
+            customer_payment_date: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    });
+
     processed.push({
       row: rowNo,
       ro_no,
@@ -172,11 +191,14 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     });
   }
 
-  // 🚀 BULK UPDATE
-  if (updates.length) {
-    await BillingRecord.bulkWrite(updates);
+  // 🚀 BULK EXECUTION
+  if (billingUpdates.length) {
+    await BillingRecord.bulkWrite(billingUpdates);
   }
-  console.log(Object.keys(rows[0]));
+
+  if (paymentUpdates.length) {
+    await Payment.bulkWrite(paymentUpdates);
+  }
 
   res.status(200).json({
     success: true,
