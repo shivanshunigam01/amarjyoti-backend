@@ -147,10 +147,11 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     }
 
     // 🔥 FIND BILLING RECORD
-    const record = await BillingRecord.findOne({
-      branch,
-      ro_no,
-    });
+ // 🔥 FIND BILLING RECORD (FINAL FIX)
+const record = await BillingRecord.findOne({
+  branch,
+  ro_no: new RegExp(`^${ro_no}$`, 'i'),
+});
 
     if (!record) {
       notFound.push({
@@ -161,6 +162,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
+    console.log("Searching RO:", ro_no);
     // 🔥 CALCULATE VALUES
     const newPaid = (record.paid_amount || 0) + paid_amt;
     const remaining = (record.total_amt || 0) - newPaid;
