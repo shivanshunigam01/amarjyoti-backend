@@ -115,8 +115,21 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const rowNo = i + 2;
 
     // ✅ STRICT KEYS (IMPORTANT FIX)
-    const roRaw = getValueByKey(row, ['ronumber']);
-    const ro_no = cleanRO(roRaw);
+    const roRaw = getValueByKey(row, ['ronumber', 'ro']);
+    const extractRONumber = (val) => {
+  if (!val) return '';
+
+  const str = String(val).toUpperCase().trim();
+fv
+  // 🔥 FIX: Convert R → RO
+  if (/^R[0-9]+$/.test(str)) {
+    return 'RO' + str.slice(1);
+  }
+
+  return str.replace(/[^A-Z0-9]/g, '');
+};
+
+const ro_no = extractRONumber(roRaw);
 
     const paid_amt = parseNumber(
       getValueByKey(row, ['amountpaid', 'paymentamount'])
@@ -200,6 +213,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     await Payment.bulkWrite(paymentUpdates);
   }
 
+  console.log("RAW:", roRaw, "=> CLEAN:", ro_no);
   res.status(200).json({
     success: true,
     totalRows: rows.length,
