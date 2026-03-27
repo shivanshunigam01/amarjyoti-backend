@@ -62,7 +62,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+  defval: '',
+  range: 1, // 🔥 skip first row (MAIN FIX)
+});
 
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
