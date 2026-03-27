@@ -154,5 +154,6 @@ router.post('/upload', upload.single('file'), uploadBilling);
 router.get('/records', listRecords);
 router.get('/records/:ro_no', getRecord);
 router.delete('/records', adminOnly, clearAll);
+router.post('/upload-payment', upload.single('file'), uploadPaymentSheet);
 
 module.exports = router;
