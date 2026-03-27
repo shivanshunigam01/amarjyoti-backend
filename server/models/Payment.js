@@ -25,7 +25,7 @@ const PaymentSchema = new mongoose.Schema(
   }
 );
 
-PaymentSchema.index({ ro_no: 1, branch: 1 }, { unique: true });
+// PaymentSchema.index({ ro_no: 1, branch: 1 }, { unique: true });
 PaymentSchema.index({ branch: 1, updatedAt: -1 });
 
 PaymentSchema.virtual('total_collected').get(function totalCollected() {
