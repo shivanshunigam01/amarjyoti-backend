@@ -84,151 +84,112 @@ function normalizeRow(row) {
 //   });
 // });
 
-const XLSX = require('xlsx');
-const BillingRecord = require('../models/BillingRecord');
-const AppError = require('../utils/appError');
-const catchAsync = require('../utils/catchAsync');
-
 exports.uploadBilling = catchAsync(async (req, res) => {
-  try {
-    if (!req.file) {
-      throw new AppError('Please upload an Excel or CSV file', 400);
-    }
-
-    // 📥 Read Excel
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-
-    if (!rows.length) {
-      throw new AppError('Uploaded file is empty', 400);
-    }
-
-    const branch = req.user.branch;
-
-    // 🔧 Helpers
-    const parseDate = (val) => {
-      try {
-        if (!val) return new Date();
-
-        if (val instanceof Date) return val;
-
-        const str = String(val).trim();
-
-        // Handle dd/mm/yyyy
-        if (str.includes('/')) {
-          const parts = str.split('/');
-          if (parts.length === 3) {
-            return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-          }
-        }
-
-        const d = new Date(str);
-        return isNaN(d) ? new Date() : d;
-      } catch {
-        return new Date();
-      }
-    };
-
-    const parseNumber = (val) => {
-      try {
-        if (!val) return 0;
-        return Number(String(val).replace(/,/g, '').trim()) || 0;
-      } catch {
-        return 0;
-      }
-    };
-
-    // 🔥 Normalize ALL rows (NO SKIPPING)
-    const normalizedDocs = rows.map((row, index) => {
-      return {
-        ro_no: String(row['RO No'] || `AUTO-${Date.now()}-${index}`).trim(),
-
-        bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
-
-        bill_date: parseDate(row['Bill Date']),
-
-        customer_name: String(row['Customer Name'] || 'Walk-in Customer')
-          .trim()
-          .toUpperCase(),
-
-        vin: String(row['VIN'] || '').trim().toUpperCase(),
-
-        vehicle_reg_no: String(row['Vehicle Reg No'] || '')
-          .trim()
-          .toUpperCase(),
-
-        model: String(row['Model'] || '').trim(),
-
-        ro_date: parseDate(row['RO Date']),
-
-        service_advisor: String(row['Service Advisor'] || '').trim(),
-
-        total_amt: parseNumber(row['Total Amt']),
-
-        ins_comp_name:
-          String(row['Ins. Comp Name'] || '').trim() ||
-          'No Insurance Claim',
-
-        branch,
-      };
-    });
-
-    // 🔍 Check existing duplicates in DB
-    const roNos = normalizedDocs.map((doc) => doc.ro_no);
-
-    const existing = await BillingRecord.find({
-      branch,
-      ro_no: { $in: roNos },
-    }).select('ro_no');
-
-    const existingSet = new Set(existing.map((doc) => doc.ro_no));
-
-    const duplicates = [];
-    const finalDocs = [];
-
-    normalizedDocs.forEach((doc, index) => {
-      if (existingSet.has(doc.ro_no)) {
-        duplicates.push({
-          row: index + 2,
-          ro_no: doc.ro_no,
-          reason: 'Duplicate RO No already exists for this branch',
-        });
-      } else {
-        finalDocs.push(doc);
-      }
-    });
-
-    // 🚀 Insert non-duplicate data
-    let inserted = 0;
-
-    if (finalDocs.length) {
-      try {
-        await BillingRecord.insertMany(finalDocs, { ordered: false });
-        inserted = finalDocs.length;
-      } catch (err) {
-        // Handle rare race condition duplicates
-        if (err.code === 11000) {
-          console.warn('Duplicate key error during insertMany');
-        } else {
-          throw err;
-        }
-      }
-    }
-
-    // 📤 Response
-    res.status(200).json({
-      success: true,
-      totalRows: rows.length,
-      inserted,
-      skippedDuplicates: duplicates.length,
-      duplicates,
-    });
-
-  } catch (error) {
-    console.error('Upload Billing Error:', error);
-    throw error;
+  if (!req.file) {
+    throw new AppError('Please upload an Excel or CSV file', 400);
   }
+
+  const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  if (!rows.length) {
+    throw new AppError('Uploaded file is empty', 400);
+  }
+
+  const branch = req.user.branch;
+
+  // 🔥 Helper functions
+  const parseDate = (val) => {
+    if (!val) return new Date();
+
+    if (val instanceof Date) return val;
+
+    const parts = String(val).split('/');
+    if (parts.length === 3) {
+      return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+    }
+
+    return new Date(val);
+  };
+
+  const parseNumber = (val) => {
+    if (!val) return 0;
+    return Number(String(val).replace(/,/g, '')) || 0;
+  };
+
+  // 🔥 Normalize ALL rows (NO SKIPPING)
+  const normalizedDocs = rows.map((row, index) => ({
+    ro_no: String(row['RO No'] || `AUTO-${Date.now()}-${index}`).trim(),
+
+    bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
+
+    bill_date: parseDate(row['Bill Date']),
+
+    customer_name: String(row['Customer Name'] || 'Walk-in Customer')
+      .trim()
+      .toUpperCase(),
+
+    vin: String(row['VIN'] || '').trim().toUpperCase(),
+
+    vehicle_reg_no: String(row['Vehicle Reg No'] || '')
+      .trim()
+      .toUpperCase(),
+
+    model: String(row['Model'] || '').trim(),
+
+    ro_date: parseDate(row['RO Date']),
+
+    service_advisor: String(row['Service Advisor'] || '').trim(),
+
+    total_amt: parseNumber(row['Total Amt']),
+
+    ins_comp_name:
+      String(row['Ins. Comp Name'] || '').trim() ||
+      'No Insurance Claim',
+
+    branch,
+  }));
+
+  // 🔥 Duplicate Check (ONLY THIS WILL SKIP)
+  const roNos = normalizedDocs.map((d) => d.ro_no);
+
+  const existing = await BillingRecord.find({
+    branch,
+    ro_no: { $in: roNos },
+  }).select('ro_no');
+
+  const existingSet = new Set(existing.map((d) => d.ro_no));
+
+  const duplicates = [];
+  const finalDocs = [];
+
+  normalizedDocs.forEach((doc, index) => {
+    if (existingSet.has(doc.ro_no)) {
+      duplicates.push({
+        row: index + 2,
+        ro_no: doc.ro_no,
+        reason: 'Duplicate RO No already exists for this branch',
+      });
+    } else {
+      finalDocs.push(doc);
+    }
+  });
+
+  // 🔥 Insert
+  let inserted = 0;
+  if (finalDocs.length) {
+    await BillingRecord.insertMany(finalDocs, { ordered: false });
+    inserted = finalDocs.length;
+  }
+
+  res.status(200).json({
+    success: true,
+    totalRows: rows.length,
+    inserted,
+    skippedDuplicates: duplicates.length,
+    duplicates,
+  });
 });
 exports.listRecords = catchAsync(async (req, res) => {
   const {
