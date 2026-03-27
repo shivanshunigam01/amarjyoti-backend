@@ -6,6 +6,8 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
+const scheduleRoutes = require('./routes/scheduleRoutes');
+
 
 const app = express();
 
@@ -47,7 +49,7 @@ app.use('/api/v1/billing', require('./routes/billingRoutes'));
 app.use('/api/v1/payments', require('./routes/paymentRoutes'));
 app.use('/api/v1/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/v1/reports', require('./routes/reportRoutes'));
-
+app.use('/api/v1/schedules', scheduleRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
