@@ -63,10 +63,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-  const rows = XLSX.utils.sheet_to_json(sheet, {
-    defval: '',
-    range: 1, // skip header row
-  });
+ const rows = XLSX.utils.sheet_to_json(sheet, {
+  defval: '',
+  raw: false, // 🔥 VERY IMPORTANT
+});
 
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
@@ -78,7 +78,6 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const cleanRO = (val) =>
     String(val || '')
       .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
       .trim();
 
   const parseNumber = (val) =>
@@ -115,11 +114,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const rowNo = i + 2;
 
     // ✅ STRICT KEYS (IMPORTANT FIX)
-    const roRaw = getValueByKey(row, [
-  'ronumber',
-  'ro',
-  'rono',
-]);
+ const roRaw = String(
+  getValueByKey(row, ['ronumber', 'ro', 'rono'])
+).trim();
     const ro_no = cleanRO(roRaw);
 
     const paid_amt = parseNumber(
@@ -141,9 +138,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     console.log("ROW RO:", roRaw);
 console.log("CLEAN RO:", ro_no);
     // 🔥 FIND BILLING RECORD
-   const record = await BillingRecord.findOne({
+const record = await BillingRecord.findOne({
   branch,
-  ro_no: { $regex: `^${ro_no}$`, $options: 'i' },
+  ro_no: { $regex: `^${roRaw}$`, $options: 'i' },
 });
 
 if (!record) {
@@ -200,6 +197,7 @@ const updatedCustomerAmount =
   },
 });
 
+console.log("EXCEL RO:", roRaw);
     processed.push({
       row: rowNo,
       ro_no,
