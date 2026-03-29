@@ -79,35 +79,60 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // ✅ HELPERS
+  // 🔥 HELPER FUNCTIONS
+  const normalize = (str) =>
+    String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const getValue = (row, keys) => {
+    const map = {};
+    Object.keys(row).forEach((k) => {
+      map[normalize(k)] = k;
+    });
+
+    for (const key of keys) {
+      const norm = normalize(key);
+      if (map[norm]) return row[map[norm]];
+    }
+
+    return '';
+  };
+
   const cleanRO = (val) =>
-    String(val || '')
-      .toUpperCase()
-      .trim();
+    String(val || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 
   const parseNumber = (val) =>
     Number(String(val || '').replace(/,/g, '')) || 0;
 
   const cleanText = (val) =>
     String(val || '').trim().toUpperCase();
-console.log("HEADERS:", Object.keys(rows[0]));
 
-console.log(Object.keys(rows[0]))
+  console.log("HEADERS:", Object.keys(rows[0]));
 
+  // 🚀 STEP 1: COLLECT ALL RO
+  const roList = rows.map((row) =>
+    cleanRO(getValue(row, ['ro no', 'ro_no', 'rono', 'ro']))
+  ).filter(Boolean);
+
+  // 🚀 STEP 2: FETCH ALL RECORDS (ONE QUERY ONLY)
+  const records = await BillingRecord.find({
+    branch,
+    ro_no: { $in: roList },
+  });
+
+  const recordMap = new Map(records.map(r => [r.ro_no, r]));
+
+  // RESULT ARRAYS
   const billingUpdates = [];
   const paymentUpdates = [];
-
   const notFound = [];
   const processed = [];
 
+  // 🚀 MAIN LOOP
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const rowNo = i + 2;
 
-    // ✅ IMPORTANT: match exact column name from Excel
-  const roRaw = String(
-  getValue(row, ['ro no', 'ro_no', 'rono', 'ro'])
-).trim();
+    const roRaw = getValue(row, ['ro no', 'ro_no', 'rono', 'ro']);
     const ro_no = cleanRO(roRaw);
 
     if (!ro_no) {
@@ -119,17 +144,24 @@ console.log(Object.keys(rows[0]))
     }
 
     const paid_amt = parseNumber(
-  getValue(row, ['customer payment', 'amount paid', 'payment'])
-);
-   const payment_mode = cleanText(
-  getValue(row, ['payment mode', 'mode'])
-);
+      getValue(row, ['customer payment', 'amount paid', 'payment'])
+    );
 
-    // 🔥 FIND BILLING RECORD
-    const record = await BillingRecord.findOne({
-      branch,
-      ro_no,
-    });
+    const payment_mode = cleanText(
+      getValue(row, ['payment mode', 'mode'])
+    );
+
+    // ❌ SKIP ZERO PAYMENT
+    if (paid_amt <= 0) {
+      notFound.push({
+        row: rowNo,
+        ro_no,
+        reason: 'Invalid or zero payment',
+      });
+      continue;
+    }
+
+    const record = recordMap.get(ro_no);
 
     if (!record) {
       notFound.push({
@@ -171,7 +203,7 @@ console.log(Object.keys(rows[0]))
             customer_amount_paid: paid_amt,
           },
           $set: {
-            customer_payment_mode: payment_mode,
+            customer_payment_mode: payment_mode || 'CASH',
             customer_payment_date: new Date(),
           },
         },
@@ -203,7 +235,6 @@ console.log(Object.keys(rows[0]))
     notFoundDetails: notFound,
   });
 });
-
 router.use(auth, branchScope);
 router.post('/upload', upload.single('file'), uploadBilling);
 router.get('/records', listRecords);
