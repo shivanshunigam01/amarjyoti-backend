@@ -33,6 +33,7 @@ const upload = multer({
 });
 
 
+
 // const getValueByKey = (row, possibleKeys) => {
 //   const keys = Object.keys(row);
 
@@ -89,9 +90,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const cleanText = (val) =>
     String(val || '').trim().toUpperCase();
+console.log("HEADERS:", Object.keys(rows[0]));
 
-  // 🔥 DEBUG (run once, then remove)
-  console.log("HEADERS:", Object.keys(rows[0]));
+console.log(Object.keys(rows[0]))
 
   const billingUpdates = [];
   const paymentUpdates = [];
@@ -104,7 +105,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const rowNo = i + 2;
 
     // ✅ IMPORTANT: match exact column name from Excel
-    const roRaw = String(row['RO No'] || '').trim();
+  const roRaw = String(
+  getValue(row, ['ro no', 'ro_no', 'rono', 'ro'])
+).trim();
     const ro_no = cleanRO(roRaw);
 
     if (!ro_no) {
@@ -115,8 +118,12 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    const paid_amt = parseNumber(row['Amount Paid']);
-    const payment_mode = cleanText(row['Payment Mode']);
+    const paid_amt = parseNumber(
+  getValue(row, ['customer payment', 'amount paid', 'payment'])
+);
+   const payment_mode = cleanText(
+  getValue(row, ['payment mode', 'mode'])
+);
 
     // 🔥 FIND BILLING RECORD
     const record = await BillingRecord.findOne({
