@@ -51,115 +51,161 @@ const getValueByKey = (row, possibleKeys) => {
   return '';
 };
 
-function normalizeRo(ro) {
-  if (!ro) return '';
-
-  let value = String(ro).trim();
-
-  // अगर already R से शुरू है → ठीक है
-  if (value.startsWith('R')) return value;
-
-  // अगर numeric है → convert करो
-  // Example: 2632026 → R202600326 (अगर logic चाहिए तो adjust करेंगे)
-  // फिलहाल basic fix:
-  return `R${value}`;
-}
 
 // Add to billing routes
 
 // 🔥 PAYMENT UPLOAD CONTROLLER (FIXED)
-exports.uploadPayments = catchAsync(async (req, res) => {
+const uploadPaymentSheet = catchAsync(async (req, res) => {
   if (!req.file) {
-    throw new AppError('Please upload file', 400);
+    throw new AppError('Please upload payment sheet', 400);
   }
 
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    defval: '',
+    range: 1, // skip header row
+  });
+
+  if (!rows.length) {
+    throw new AppError('Uploaded file is empty', 400);
+  }
 
   const branch = req.user.branch;
 
-  let updated = 0;
-  let notFound = [];
-  let errors = [];
+  // 🔥 HELPERS
+  const cleanRO = (val) =>
+    String(val || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .trim();
+
+  const parseNumber = (val) =>
+    Number(String(val || '').replace(/,/g, '')) || 0;
+
+  const cleanText = (val) =>
+    String(val || '').trim().toUpperCase();
+
+  const getValueByKey = (row, possibleKeys) => {
+    const keys = Object.keys(row);
+
+    for (const key of keys) {
+      const normalizedKey = key
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+      for (const possible of possibleKeys) {
+        if (normalizedKey.includes(possible)) {
+          return row[key];
+        }
+      }
+    }
+    return '';
+  };
+
+  const billingUpdates = [];
+  const paymentUpdates = [];
+
+  const notFound = [];
+  const processed = [];
 
   for (let i = 0; i < rows.length; i++) {
-    try {
-      const row = rows[i];
+    const row = rows[i];
+    const rowNo = i + 2;
 
-      // 🔥 CORRECT MAPPING
-      let ro_no = normalizeRo(row['Ro Number']);
+    // ✅ STRICT KEYS (IMPORTANT FIX)
+    const roRaw = getValueByKey(row, ['ronumber']);
+    const ro_no = cleanRO(roRaw);
 
-      if (!ro_no) {
-        errors.push({ row: i + 2, reason: 'Missing RO Number' });
-        continue;
-      }
+    const paid_amt = parseNumber(
+      getValueByKey(row, ['amountpaid', 'paymentamount'])
+    );
 
-      // 🔍 FIND BILLING
-      const billing = await BillingRecord.findOne({
-        ro_no,
-        branch,
+    const payment_mode = cleanText(
+      getValueByKey(row, ['paymentmode'])
+    );
+
+    if (!ro_no) {
+      notFound.push({
+        row: rowNo,
+        reason: 'RO missing / header mismatch',
       });
-
-      if (!billing) {
-        notFound.push({
-          row: i + 2,
-          ro_no,
-          reason: 'RO not found in billing',
-        });
-        continue;
-      }
-
-      // 💰 PAYMENT VALUES
-      const amount = Number(row['Amount'] || 0);
-      const paymentMode = row['Payment Method'] || '';
-      const paymentDate = row['value Date']
-        ? new Date(row['value Date'])
-        : null;
-
-      // 🔥 UPSERT PAYMENT
-      const payment = await Payment.findOneAndUpdate(
-        { ro_no, branch },
-        {
-          ro_no,
-          branch,
-          $inc: { customer_amount_paid: amount },
-          customer_payment_mode: paymentMode,
-          customer_payment_date: paymentDate,
-          customer_txn_id: row['Reference'] || '',
-        },
-        { new: true, upsert: true }
-      );
-
-      // 🔥 UPDATE BILLING
-      const totalCollected =
-        (payment.customer_amount_paid || 0) +
-        (payment.insurance_amount || 0);
-
-      billing.paid_amount = totalCollected;
-      billing.remaining_amount =
-        (billing.total_amt || 0) - totalCollected;
-
-      await billing.save();
-
-      updated++;
-    } catch (err) {
-      errors.push({
-        row: i + 2,
-        error: err.message,
-      });
+      continue;
     }
+
+    // 🔥 FIND BILLING RECORD
+    const record = await BillingRecord.findOne({
+      branch,
+      ro_no,
+    });
+
+    if (!record) {
+      notFound.push({
+        row: rowNo,
+        ro_no,
+        reason: 'RO not found',
+      });
+      continue;
+    }
+
+    // 🔥 CALCULATE
+    const newPaid = (record.paid_amount || 0) + paid_amt;
+    const remaining = (record.total_amt || 0) - newPaid;
+
+    // ✅ UPDATE BILLING
+    billingUpdates.push({
+      updateOne: {
+        filter: { _id: record._id },
+        update: {
+          $set: {
+            paid_amount: newPaid,
+            remaining_amount: remaining < 0 ? 0 : remaining,
+            payment_mode: payment_mode || record.payment_mode,
+          },
+        },
+      },
+    });
+
+    // ✅ UPSERT PAYMENT COLLECTION (VERY IMPORTANT)
+    paymentUpdates.push({
+      updateOne: {
+        filter: { ro_no, branch },
+        update: {
+          $set: {
+            ro_no,
+            branch,
+            customer_amount_paid: paid_amt,
+            customer_payment_mode: payment_mode,
+            customer_payment_date: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    });
+
+    processed.push({
+      row: rowNo,
+      ro_no,
+      paid_amt,
+    });
   }
-  console.log("Incoming RO:", row['Ro Number']);
-console.log("Normalized:", ro_no);
+
+  // 🚀 BULK EXECUTION
+  if (billingUpdates.length) {
+    await BillingRecord.bulkWrite(billingUpdates);
+  }
+
+  if (paymentUpdates.length) {
+    await Payment.bulkWrite(paymentUpdates);
+  }
 
   res.status(200).json({
     success: true,
     totalRows: rows.length,
-    updated,
+    updated: processed.length,
     notFound: notFound.length,
     notFoundDetails: notFound,
-    errors,
   });
 });
 
