@@ -91,7 +91,11 @@ exports.uploadBilling = catchAsync(async (req, res) => {
 
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    defval: '',
+    raw: false,
+  });
 
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
@@ -99,7 +103,12 @@ exports.uploadBilling = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // 🔥 Helper functions
+  // ✅ HELPERS
+  const cleanRO = (val) =>
+    String(val || '')
+      .toUpperCase()
+      .trim();
+
   const parseDate = (val) => {
     if (!val) return new Date();
 
@@ -113,54 +122,49 @@ exports.uploadBilling = catchAsync(async (req, res) => {
     return new Date(val);
   };
 
-  const parseNumber = (val) => {
-    if (!val) return 0;
-    return Number(String(val).replace(/,/g, '')) || 0;
-  };
+  const parseNumber = (val) =>
+    Number(String(val || '').replace(/,/g, '')) || 0;
 
-     const cleanRO = (val) =>
-  String(val || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .trim();
-  // 🔥 Normalize ALL rows (NO SKIPPING)
-  const normalizedDocs = rows.map((row, index) => ({
-    // ro_no: String(row['RO No'] || `AUTO-${Date.now()}-${index}`).trim(),
- 
+  // 🔥 DEBUG (run once)
+  console.log("BILLING HEADERS:", Object.keys(rows[0]));
 
-ro_no: cleanRO(row['RO No']),
+  // ✅ NORMALIZE
+  const normalizedDocs = rows.map((row, index) => {
+    const roRaw = String(row['RO No'] || '').trim();
+    const ro_no = cleanRO(roRaw);
 
-    bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
+    return {
+      ro_no,
+      bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
+      bill_date: parseDate(row['Bill Date']),
+      customer_name: String(row['Customer Name'] || 'Walk-in Customer')
+        .trim()
+        .toUpperCase(),
+      vin: String(row['VIN'] || '').trim().toUpperCase(),
+      vehicle_reg_no: String(row['Vehicle Reg No'] || '')
+        .trim()
+        .toUpperCase(),
+      model: String(row['Model'] || '').trim(),
+      ro_date: parseDate(row['RO Date']),
+      service_advisor: String(row['Service Advisor'] || '').trim(),
+      total_amt: parseNumber(row['Total Amt']),
+      ins_comp_name:
+        String(row['Ins. Comp Name'] || '').trim() ||
+        'No Insurance Claim',
+      branch,
+    };
+  });
 
-    bill_date: parseDate(row['Bill Date']),
+  // 🔥 REMOVE EMPTY RO
+  const validDocs = normalizedDocs.filter((doc, index) => {
+    if (!doc.ro_no) {
+      return false;
+    }
+    return true;
+  });
 
-    customer_name: String(row['Customer Name'] || 'Walk-in Customer')
-      .trim()
-      .toUpperCase(),
-
-    vin: String(row['VIN'] || '').trim().toUpperCase(),
-
-    vehicle_reg_no: String(row['Vehicle Reg No'] || '')
-      .trim()
-      .toUpperCase(),
-
-    model: String(row['Model'] || '').trim(),
-
-    ro_date: parseDate(row['RO Date']),
-
-    service_advisor: String(row['Service Advisor'] || '').trim(),
-
-    total_amt: parseNumber(row['Total Amt']),
-
-    ins_comp_name:
-      String(row['Ins. Comp Name'] || '').trim() ||
-      'No Insurance Claim',
-
-    branch,
-  }));
-
-  // 🔥 Duplicate Check (ONLY THIS WILL SKIP)
-  const roNos = normalizedDocs.map((d) => d.ro_no);
+  // 🔥 DUPLICATE CHECK
+  const roNos = validDocs.map((d) => d.ro_no);
 
   const existing = await BillingRecord.find({
     branch,
@@ -172,20 +176,21 @@ ro_no: cleanRO(row['RO No']),
   const duplicates = [];
   const finalDocs = [];
 
-  normalizedDocs.forEach((doc, index) => {
+  validDocs.forEach((doc, index) => {
     if (existingSet.has(doc.ro_no)) {
       duplicates.push({
         row: index + 2,
         ro_no: doc.ro_no,
-        reason: 'Duplicate RO No already exists for this branch',
+        reason: 'Duplicate RO No already exists',
       });
     } else {
       finalDocs.push(doc);
     }
   });
 
-  // 🔥 Insert
+  // 🚀 INSERT
   let inserted = 0;
+
   if (finalDocs.length) {
     await BillingRecord.insertMany(finalDocs, { ordered: false });
     inserted = finalDocs.length;

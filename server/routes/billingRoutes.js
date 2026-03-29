@@ -33,24 +33,28 @@ const upload = multer({
 });
 
 
-const getValueByKey = (row, possibleKeys) => {
-  const keys = Object.keys(row);
+// const getValueByKey = (row, possibleKeys) => {
+//   const keys = Object.keys(row);
 
-  for (const key of keys) {
-    const normalizedKey = key
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '');
+//   for (const key of keys) {
+//     const normalizedKey = key
+//       .toLowerCase()
+//       .replace(/[^a-z0-9]/g, '');
 
-    for (const possible of possibleKeys) {
-      if (normalizedKey.includes(possible)) {
-        return row[key];
-      }
-    }
-  }
+//     for (const possible of possibleKeys) {
+//       if (normalizedKey.includes(possible)) {
+//         return row[key];
+//       }
+//     }
+//   }
 
-  return '';
-};
+//   return '';
+// };
 
+const cleanRO = (val) =>
+  String(val || '')
+    .toUpperCase()
+    .trim();
 
 // Add to billing routes
 
@@ -63,10 +67,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
- const rows = XLSX.utils.sheet_to_json(sheet, {
-  defval: '',
-  raw: false, // 🔥 VERY IMPORTANT
-});
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    defval: '',
+    raw: false,
+  });
 
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
@@ -74,7 +78,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
 
   const branch = req.user.branch;
 
-  // 🔥 HELPERS
+  // ✅ HELPERS
   const cleanRO = (val) =>
     String(val || '')
       .toUpperCase()
@@ -86,22 +90,8 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const cleanText = (val) =>
     String(val || '').trim().toUpperCase();
 
-  const getValueByKey = (row, possibleKeys) => {
-    const keys = Object.keys(row);
-
-    for (const key of keys) {
-      const normalizedKey = key
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '');
-
-      for (const possible of possibleKeys) {
-        if (normalizedKey.includes(possible)) {
-          return row[key];
-        }
-      }
-    }
-    return '';
-  };
+  // 🔥 DEBUG (run once, then remove)
+  console.log("HEADERS:", Object.keys(rows[0]));
 
   const billingUpdates = [];
   const paymentUpdates = [];
@@ -113,19 +103,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const row = rows[i];
     const rowNo = i + 2;
 
-    // ✅ STRICT KEYS (IMPORTANT FIX)
- const roRaw = String(
-  getValueByKey(row, ['ronumber', 'ro', 'rono'])
-).trim();
+    // ✅ IMPORTANT: match exact column name from Excel
+    const roRaw = String(row['RO No'] || '').trim();
     const ro_no = cleanRO(roRaw);
-
-    const paid_amt = parseNumber(
-      getValueByKey(row, ['amountpaid', 'paymentamount'])
-    );
-
-    const payment_mode = cleanText(
-      getValueByKey(row, ['paymentmode'])
-    );
 
     if (!ro_no) {
       notFound.push({
@@ -135,17 +115,15 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    console.log("ROW RO:", roRaw);
-console.log("CLEAN RO:", ro_no);
-    // 🔥 FIND BILLING RECORD
-const record = await BillingRecord.findOne({
-  branch,
-  ro_no: { $regex: `^${roRaw}$`, $options: 'i' },
-});
+    const paid_amt = parseNumber(row['Amount Paid']);
+    const payment_mode = cleanText(row['Payment Mode']);
 
-if (!record) {
-  console.log("NOT FOUND RO:", ro_no);
-}
+    // 🔥 FIND BILLING RECORD
+    const record = await BillingRecord.findOne({
+      branch,
+      ro_no,
+    });
+
     if (!record) {
       notFound.push({
         row: rowNo,
@@ -155,14 +133,15 @@ if (!record) {
       continue;
     }
 
-    // 🔥 CALCULATE
+    // ✅ CALCULATION
     const newPaid = Math.min(
-  (record.paid_amount || 0) + paid_amt,
-  record.total_amt || 0
-);
+      (record.paid_amount || 0) + paid_amt,
+      record.total_amt || 0
+    );
+
     const remaining = (record.total_amt || 0) - newPaid;
 
-    // ✅ UPDATE BILLING
+    // ✅ BILLING UPDATE
     billingUpdates.push({
       updateOne: {
         filter: { _id: record._id },
@@ -176,28 +155,23 @@ if (!record) {
       },
     });
 
-    const existingPayment = await Payment.findOne({ ro_no, branch });
-
-const updatedCustomerAmount =
-  (existingPayment?.customer_amount_paid || 0) + paid_amt;
-    // ✅ UPSERT PAYMENT COLLECTION (VERY IMPORTANT)
-  paymentUpdates.push({
-  updateOne: {
-    filter: { ro_no, branch },
-    update: {
-      $inc: {
-        customer_amount_paid: paid_amt,
+    // ✅ PAYMENT UPSERT
+    paymentUpdates.push({
+      updateOne: {
+        filter: { ro_no, branch },
+        update: {
+          $inc: {
+            customer_amount_paid: paid_amt,
+          },
+          $set: {
+            customer_payment_mode: payment_mode,
+            customer_payment_date: new Date(),
+          },
+        },
+        upsert: true,
       },
-      $set: {
-        customer_payment_mode: payment_mode,
-        customer_payment_date: new Date(),
-      },
-    },
-    upsert: true,
-  },
-});
+    });
 
-console.log("EXCEL RO:", roRaw);
     processed.push({
       row: rowNo,
       ro_no,
