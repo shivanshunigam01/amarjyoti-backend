@@ -71,8 +71,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const rows = XLSX.utils.sheet_to_json(sheet, {
     defval: '',
     raw: false,
+    range: 1,
   });
 
+  console.log("FIXED HEADERS:", Object.keys(rows[0]));
   if (!rows.length) {
     throw new AppError('Uploaded file is empty', 400);
   }
