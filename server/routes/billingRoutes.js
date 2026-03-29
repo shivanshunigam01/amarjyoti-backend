@@ -115,7 +115,11 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const rowNo = i + 2;
 
     // ✅ STRICT KEYS (IMPORTANT FIX)
-    const roRaw = getValueByKey(row, ['ronumber']);
+    const roRaw = getValueByKey(row, [
+  'ronumber',
+  'ro',
+  'rono',
+]);
     const ro_no = cleanRO(roRaw);
 
     const paid_amt = parseNumber(
@@ -134,12 +138,17 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
+    console.log("ROW RO:", roRaw);
+console.log("CLEAN RO:", ro_no);
     // 🔥 FIND BILLING RECORD
-    const record = await BillingRecord.findOne({
-      branch,
-      ro_no,
-    });
+   const record = await BillingRecord.findOne({
+  branch,
+  ro_no: { $regex: `^${ro_no}$`, $options: 'i' },
+});
 
+if (!record) {
+  console.log("NOT FOUND RO:", ro_no);
+}
     if (!record) {
       notFound.push({
         row: rowNo,
@@ -150,7 +159,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     }
 
     // 🔥 CALCULATE
-    const newPaid = (record.paid_amount || 0) + paid_amt;
+    const newPaid = Math.min(
+  (record.paid_amount || 0) + paid_amt,
+  record.total_amt || 0
+);
     const remaining = (record.total_amt || 0) - newPaid;
 
     // ✅ UPDATE BILLING
@@ -167,22 +179,26 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       },
     });
 
+    const existingPayment = await Payment.findOne({ ro_no, branch });
+
+const updatedCustomerAmount =
+  (existingPayment?.customer_amount_paid || 0) + paid_amt;
     // ✅ UPSERT PAYMENT COLLECTION (VERY IMPORTANT)
-    paymentUpdates.push({
-      updateOne: {
-        filter: { ro_no, branch },
-        update: {
-          $set: {
-            ro_no,
-            branch,
-            customer_amount_paid: paid_amt,
-            customer_payment_mode: payment_mode,
-            customer_payment_date: new Date(),
-          },
-        },
-        upsert: true,
+  paymentUpdates.push({
+  updateOne: {
+    filter: { ro_no, branch },
+    update: {
+      $inc: {
+        customer_amount_paid: paid_amt,
       },
-    });
+      $set: {
+        customer_payment_mode: payment_mode,
+        customer_payment_date: new Date(),
+      },
+    },
+    upsert: true,
+  },
+});
 
     processed.push({
       row: rowNo,

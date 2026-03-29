@@ -118,9 +118,17 @@ exports.uploadBilling = catchAsync(async (req, res) => {
     return Number(String(val).replace(/,/g, '')) || 0;
   };
 
+     const cleanRO = (val) =>
+  String(val || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .trim();
   // 🔥 Normalize ALL rows (NO SKIPPING)
   const normalizedDocs = rows.map((row, index) => ({
-    ro_no: String(row['RO No'] || `AUTO-${Date.now()}-${index}`).trim(),
+    // ro_no: String(row['RO No'] || `AUTO-${Date.now()}-${index}`).trim(),
+ 
+
+ro_no: cleanRO(row['RO No']),
 
     bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
 
