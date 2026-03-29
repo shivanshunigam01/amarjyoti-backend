@@ -71,7 +71,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const rows = XLSX.utils.sheet_to_json(sheet, {
     defval: '',
     raw: false,
-    range: 1,
+    range:  2,
   });
 
   console.log("FIXED HEADERS:", Object.keys(rows[0]));
