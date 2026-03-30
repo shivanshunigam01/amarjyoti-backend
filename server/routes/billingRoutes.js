@@ -323,28 +323,50 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       },
     });
 
-    // Payment: use $inc for amounts so existing paid values are preserved,
-    // and $set for mode / date / reference (last value in batch wins).
-    const incOp = {};
-    const setOp = {};
+    // Payment: $inc running totals, $set latest metadata, $push history entry.
+    // MongoDB supports all three operators in a single update document.
+    const incOp  = {};
+    const setOp  = {};
+    const pushOp = {};
+    const now    = new Date();
 
     if (acc.customerPaid > 0) {
-      incOp.customer_amount_paid    = acc.customerPaid;
-      setOp.customer_payment_mode   = acc.customerMode || 'CASH';
-      setOp.customer_payment_date   = new Date();
+      incOp.customer_amount_paid  = acc.customerPaid;
+      setOp.customer_payment_mode = acc.customerMode || 'CASH';
+      setOp.customer_payment_date = now;
       if (acc.customerRef) setOp.customer_txn_id = acc.customerRef;
+
+      // Append one history entry per RO per upload batch
+      pushOp.customer_payments = {
+        $each: [{
+          mode:         acc.customerMode || 'CASH',
+          amount_paid:  acc.customerPaid,
+          payment_date: now,
+          txn_id:       acc.customerRef || '',
+        }],
+      };
     }
 
     if (acc.insurancePaid > 0) {
       incOp.insurance_amount          = acc.insurancePaid;
       setOp.insurance_applicable      = true;
       setOp.insurance_company         = acc.insuranceCompany;
-      setOp.insurance_payment_date    = new Date();
+      setOp.insurance_payment_date    = now;
       if (acc.insuranceRef) setOp.insurance_reference_no = acc.insuranceRef;
+
+      pushOp.insurance_payments = {
+        $each: [{
+          company:      acc.insuranceCompany || '',
+          amount:       acc.insurancePaid,
+          payment_date: now,
+          reference_no: acc.insuranceRef || '',
+        }],
+      };
     }
 
     const updateDoc = { $set: setOp };
-    if (Object.keys(incOp).length) updateDoc.$inc = incOp;
+    if (Object.keys(incOp).length)  updateDoc.$inc  = incOp;
+    if (Object.keys(pushOp).length) updateDoc.$push = pushOp;
 
     paymentUpdates.push({
       updateOne: {

@@ -24,20 +24,34 @@ function formatPaymentResponse(record, payment) {
   return {
     id: payment._id,
     ro_no: payment.ro_no,
-    customer_payment_mode: payment.customer_payment_mode,
-    customer_amount_paid: payment.customer_amount_paid,
-    customer_payment_date: toISODate(payment.customer_payment_date),
-    customer_txn_id: payment.customer_txn_id,
-    insurance_applicable: payment.insurance_applicable,
-    insurance_company: payment.insurance_company,
-    insurance_amount: payment.insurance_amount,
+    // ── Flat totals / latest-payment fields (unchanged for compatibility) ──
+    customer_payment_mode:  payment.customer_payment_mode,
+    customer_amount_paid:   payment.customer_amount_paid,
+    customer_payment_date:  toISODate(payment.customer_payment_date),
+    customer_txn_id:        payment.customer_txn_id,
+    insurance_applicable:   payment.insurance_applicable,
+    insurance_company:      payment.insurance_company,
+    insurance_amount:       payment.insurance_amount,
     insurance_payment_date: toISODate(payment.insurance_payment_date),
     insurance_reference_no: payment.insurance_reference_no,
-    notes: payment.notes,
+    notes:           payment.notes,
     total_collected: summary.total_collected,
-    balance: summary.balance,
-    status: summary.status,
-    branch: payment.branch,
+    balance:         summary.balance,
+    status:          summary.status,
+    branch:          payment.branch,
+    // ── History arrays (new — empty array for legacy docs) ────────────────
+    customer_payments: (payment.customer_payments || []).map((p) => ({
+      mode:         p.mode        || '',
+      amount_paid:  p.amount_paid || 0,
+      payment_date: toISODate(p.payment_date),
+      txn_id:       p.txn_id      || '',
+    })),
+    insurance_payments: (payment.insurance_payments || []).map((p) => ({
+      company:      p.company      || '',
+      amount:       p.amount       || 0,
+      payment_date: toISODate(p.payment_date),
+      reference_no: p.reference_no || '',
+    })),
   };
 }
 
@@ -53,20 +67,49 @@ exports.getPayment = catchAsync(async (req, res) => {
 });
 
 exports.savePayment = catchAsync(async (req, res) => {
-  const record = await ensureRecordExists(req.params.ro_no, req.user.branch);
+  const record  = await ensureRecordExists(req.params.ro_no, req.user.branch);
   const payment = await getOrCreatePayment(req.params.ro_no, req.user.branch);
 
-  payment.customer_payment_mode = req.body.customer_payment_mode || '';
-  payment.customer_amount_paid = Number(req.body.customer_amount_paid || 0);
-  payment.customer_payment_date = req.body.customer_payment_date || null;
-  payment.customer_txn_id = req.body.customer_txn_id || '';
+  const newCustTotal = Number(req.body.customer_amount_paid || 0);
+  const newInsTotal  = Number(req.body.insurance_amount     || 0);
+  const custDelta    = newCustTotal - (payment.customer_amount_paid || 0);
+  const insDelta     = newInsTotal  - (payment.insurance_amount     || 0);
 
-  payment.insurance_applicable = Boolean(req.body.insurance_applicable);
-  payment.insurance_company = req.body.insurance_company || '';
-  payment.insurance_amount = Number(req.body.insurance_amount || 0);
+  // Push a history entry only when the amount genuinely increases
+  if (custDelta > 0) {
+    payment.customer_payments.push({
+      mode:         req.body.customer_payment_mode || '',
+      amount_paid:  custDelta,
+      payment_date: req.body.customer_payment_date
+        ? new Date(req.body.customer_payment_date)
+        : new Date(),
+      txn_id: req.body.customer_txn_id || '',
+    });
+  }
+
+  if (insDelta > 0 && req.body.insurance_applicable) {
+    payment.insurance_payments.push({
+      company:      req.body.insurance_company      || '',
+      amount:       insDelta,
+      payment_date: req.body.insurance_payment_date
+        ? new Date(req.body.insurance_payment_date)
+        : new Date(),
+      reference_no: req.body.insurance_reference_no || '',
+    });
+  }
+
+  // Update flat totals and metadata (backward-compatible fields)
+  payment.customer_payment_mode  = req.body.customer_payment_mode || '';
+  payment.customer_amount_paid   = newCustTotal;
+  payment.customer_payment_date  = req.body.customer_payment_date || null;
+  payment.customer_txn_id        = req.body.customer_txn_id       || '';
+
+  payment.insurance_applicable   = Boolean(req.body.insurance_applicable);
+  payment.insurance_company      = req.body.insurance_company      || '';
+  payment.insurance_amount       = newInsTotal;
   payment.insurance_payment_date = req.body.insurance_payment_date || null;
   payment.insurance_reference_no = req.body.insurance_reference_no || '';
-  payment.notes = req.body.notes || '';
+  payment.notes                  = req.body.notes                  || '';
 
   await payment.save();
   const response = formatPaymentResponse(record, payment);
@@ -75,7 +118,7 @@ exports.savePayment = catchAsync(async (req, res) => {
     success: true,
     message: 'Payment saved successfully',
     payment: response,
-    status: response.status,
+    status:  response.status,
   });
 });
 

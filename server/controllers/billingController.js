@@ -323,22 +323,35 @@ exports.getRecord = catchAsync(async (req, res) => {
     },
     payment: {
       customer_payment: {
-        mode: payment?.customer_payment_mode || '',
-        amount_paid: payment?.customer_amount_paid || 0,
+        mode:         payment?.customer_payment_mode  || '',
+        amount_paid:  payment?.customer_amount_paid   || 0,
         payment_date: toISODate(payment?.customer_payment_date),
-        txn_id: payment?.customer_txn_id || '',
+        txn_id:       payment?.customer_txn_id        || '',
       },
       insurance_payment: {
-        applicable: payment?.insurance_applicable || false,
-        company: payment?.insurance_company || '',
-        amount: payment?.insurance_amount || 0,
+        applicable:   payment?.insurance_applicable   || false,
+        company:      payment?.insurance_company      || '',
+        amount:       payment?.insurance_amount       || 0,
         payment_date: toISODate(payment?.insurance_payment_date),
         reference_no: payment?.insurance_reference_no || '',
       },
+      // ── History arrays — legacy docs return [] ────────────────────────────
+      customer_payments: (payment?.customer_payments || []).map((p) => ({
+        mode:         p.mode        || '',
+        amount_paid:  p.amount_paid || 0,
+        payment_date: toISODate(p.payment_date),
+        txn_id:       p.txn_id      || '',
+      })),
+      insurance_payments: (payment?.insurance_payments || []).map((p) => ({
+        company:      p.company      || '',
+        amount:       p.amount       || 0,
+        payment_date: toISODate(p.payment_date),
+        reference_no: p.reference_no || '',
+      })),
       total_collected: summary.total_collected,
-      balance: summary.balance,
-      status: summary.status,
-      notes: payment?.notes || '',
+      balance:         summary.balance,
+      status:          summary.status,
+      notes:           payment?.notes || '',
     },
   });
 });
