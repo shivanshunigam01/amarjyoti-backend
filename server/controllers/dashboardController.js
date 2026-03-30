@@ -14,10 +14,12 @@ exports.getSummary = catchAsync(async (req, res) => {
 
   let total_billed_amount = 0;
   let total_collected = 0;
+  let completed_amount = 0;  // sum of total_amt for Completed records (matches Collected modal)
   let total_balance = 0;
   let pending_count = 0;
   let partial_count = 0;
   let completed_count = 0;
+  let outstanding_count = 0; // pending + partial (matches Pending ROs modal)
   let insurance_count = 0;
   let insurance_pending = 0;
   let customer_pending = 0;
@@ -31,7 +33,11 @@ exports.getSummary = catchAsync(async (req, res) => {
 
     if (summary.status === 'Pending') pending_count += 1;
     if (summary.status === 'Partial') partial_count += 1;
-    if (summary.status === 'Completed') completed_count += 1;
+    if (summary.status === 'Completed') {
+      completed_count += 1;
+      completed_amount += record.total_amt; // balance=0 so total_amt = total_collected
+    }
+    if (summary.status !== 'Completed') outstanding_count += 1;
 
     const hasInsurance = record.ins_comp_name && record.ins_comp_name !== 'No Insurance Claim';
     if (hasInsurance) insurance_count += 1;
@@ -52,11 +58,13 @@ exports.getSummary = catchAsync(async (req, res) => {
       total_bills: records.length,
       total_billed_amount,
       total_collected,
+      completed_amount,
       total_balance,
       collection_rate: total_billed_amount ? Number(((total_collected / total_billed_amount) * 100).toFixed(2)) : 0,
       pending_count,
       partial_count,
       completed_count,
+      outstanding_count,
       insurance_count,
       insurance_pending,
       customer_pending,
