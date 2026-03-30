@@ -18,6 +18,7 @@ exports.getSummary = catchAsync(async (req, res) => {
   let pending_count = 0;
   let partial_count = 0;
   let completed_count = 0;
+  let insurance_count = 0;
   let insurance_pending = 0;
   let customer_pending = 0;
 
@@ -32,10 +33,13 @@ exports.getSummary = catchAsync(async (req, res) => {
     if (summary.status === 'Partial') partial_count += 1;
     if (summary.status === 'Completed') completed_count += 1;
 
+    const hasInsurance = record.ins_comp_name && record.ins_comp_name !== 'No Insurance Claim';
+    if (hasInsurance) insurance_count += 1;
+
     const customerPaid = Number(payment?.customer_amount_paid || 0);
     const insurancePaid = Number(payment?.insurance_amount || 0);
     customer_pending += Math.max(record.total_amt - customerPaid - insurancePaid, 0);
-    if (record.ins_comp_name && record.ins_comp_name !== 'No Insurance Claim') {
+    if (hasInsurance) {
       insurance_pending += Math.max(record.total_amt - insurancePaid - customerPaid, 0);
     }
   }
@@ -53,6 +57,7 @@ exports.getSummary = catchAsync(async (req, res) => {
       pending_count,
       partial_count,
       completed_count,
+      insurance_count,
       insurance_pending,
       customer_pending,
     },

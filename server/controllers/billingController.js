@@ -242,7 +242,8 @@ exports.listRecords = catchAsync(async (req, res) => {
   }
 
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
-  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  // Allow up to 2000 records per page so the BillsModal can load all data at once
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 2000);
   const skip = (safePage - 1) * safeLimit;
   const sort = { [sort_by]: sort_order === 'asc' ? 1 : -1 };
 
