@@ -54,12 +54,17 @@ const upload = multer({
 
 // ─── PAYMENT SHEET UPLOAD ────────────────────────────────────────────────────
 const uploadPaymentSheet = catchAsync(async (req, res) => {
+  console.log('[upload-payments] ── REQUEST RECEIVED ──────────────────────────');
+  console.log('[upload-payments] User      :', req.user?.username, '| branch:', req.user?.branch);
+  console.log('[upload-payments] File      :', req.file ? `${req.file.originalname} (${(req.file.size / 1024).toFixed(1)} KB)` : 'MISSING');
+
   if (!req.file) {
     throw new AppError('Please upload payment sheet', 400);
   }
 
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+  console.log('[upload-payments] Sheet name:', workbook.SheetNames[0]);
 
   // ── STEP 1: Dynamically detect the header row ─────────────────────────────
   // Read all rows as raw arrays so we can scan for the real header line.
@@ -78,14 +83,20 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     if (hasRO && hasAmt) { headerRowIdx = i; break; }
   }
 
+  console.log('[upload-payments] Total raw rows scanned :', rawRows.length);
+  console.log('[upload-payments] Raw rows[0]            :', JSON.stringify(rawRows[0]));
+  console.log('[upload-payments] Raw rows[1]            :', JSON.stringify(rawRows[1]));
+  console.log('[upload-payments] Raw rows[2]            :', JSON.stringify(rawRows[2]));
+
   if (headerRowIdx === -1) {
+    console.log('[upload-payments] ERROR: header row not found');
     throw new AppError(
       'Could not detect header row. Ensure the sheet has RO Number and Amount columns.',
       400
     );
   }
 
-  console.log('[uploadPaymentSheet] Detected header row index:', headerRowIdx);
+  console.log('[upload-payments] Header row index       :', headerRowIdx);
 
   // ── STEP 2: Re-parse from the detected header row, drop blank rows ─────────
   const allRows = XLSX.utils.sheet_to_json(sheet, {
@@ -103,7 +114,9 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   }
 
   const finalHeaders = Object.keys(rows[0]).filter((k) => !k.startsWith('__EMPTY'));
-  console.log('[uploadPaymentSheet] Final headers after parsing:', finalHeaders);
+  console.log('[upload-payments] Data rows after header      :', rows.length);
+  console.log('[upload-payments] Parsed headers              :', finalHeaders);
+  console.log('[upload-payments] First data row sample       :', JSON.stringify(rows[0]));
 
   // ── STEP 3: Helpers ───────────────────────────────────────────────────────
   const normalize = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -151,11 +164,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   // Map: normalised name → original name (e.g. "bajajgeneralinsurance..." → "Bajaj General...")
   const insNameMap = new Map(insNames.map((n) => [normalize(n), n]));
 
-  console.log(
-    '[uploadPaymentSheet] Insurance companies loaded from DB:',
-    insNames.length,
-    insNames
-  );
+  console.log('[upload-payments] Insurance companies in DB  :', insNames.length, insNames);
 
   /**
    * Returns the original insurance company name if customerName fuzzy-matches
@@ -183,12 +192,16 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     .map((row) => cleanRO(getValue(row, RO_VALUE_HINTS)))
     .filter(Boolean);
 
+  console.log('[upload-payments] RO list extracted (first 5) :', roList.slice(0, 5), '... total:', roList.length);
+
   if (!roList.length) {
+    console.log('[upload-payments] ERROR: no valid ROs found');
     throw new AppError('No valid RO numbers found in the uploaded file', 400);
   }
 
   const records   = await BillingRecord.find({ branch, ro_no: { $in: roList } });
   const recordMap = new Map(records.map((r) => [r.ro_no, r]));
+  console.log('[upload-payments] DB records matched          :', records.length, '/', roList.length);
 
   // ── STEP 6: Parse, classify, and aggregate per RO ─────────────────────────
   // Aggregating before bulk-write ensures that multiple Excel rows for the
@@ -254,6 +267,8 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
+    console.log(`[upload-payments] Row ${rowNo}: ro_no=${ro_no} | amt=${paid_amt} | mode="${payment_mode}" | ref="${reference}" | custName="${customerName}" | dbMatch=${!!record}`);
+
     // ── Classify payment type ────────────────────────────────────────────
     let paymentType      = 'CUSTOMER';
     let matchedInsCompany = null;
@@ -264,6 +279,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       matchedInsCompany = matchInsurance(customerName);
       if (matchedInsCompany) paymentType = 'INSURANCE';
     }
+    console.log(`[upload-payments] Row ${rowNo}: classified as ${paymentType}${matchedInsCompany ? ` (ins: ${matchedInsCompany})` : ''}`);
 
     console.log(
       `[uploadPaymentSheet] Row ${rowNo} | ro_no: ${ro_no} | type: ${paymentType}` +
@@ -380,8 +396,17 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   }
 
   // ── STEP 8: Execute bulk writes ───────────────────────────────────────────
+  console.log('[upload-payments] ── BULK WRITE SUMMARY ──────────────────────');
+  console.log('[upload-payments] Billing updates :', billingUpdates.length);
+  console.log('[upload-payments] Payment updates :', paymentUpdates.length);
+  console.log('[upload-payments] Processed       :', processed.length);
+  console.log('[upload-payments] Not found       :', notFound.length);
+  if (notFound.length) console.log('[upload-payments] Not found details:', JSON.stringify(notFound));
+
   if (billingUpdates.length) await BillingRecord.bulkWrite(billingUpdates);
   if (paymentUpdates.length) await Payment.bulkWrite(paymentUpdates);
+
+  console.log('[upload-payments] ── DONE ──────────────────────────────────────');
 
   res.status(200).json({
     success:         true,
