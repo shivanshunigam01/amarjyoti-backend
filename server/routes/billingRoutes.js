@@ -231,8 +231,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     }
 
     // "Payment Method __________" → "paymentmethod"
+    // NOTE: 'mode' removed — "model_no" normalises to "modelno" which
+    // contains "mode" as a substring, causing a false column match.
     const payment_mode = cleanText(
-      getValue(row, ['paymentmethod', 'paymentmode', 'method', 'mode'])
+      getValue(row, ['paymentmethod', 'paymentmode', 'method'])
     );
 
     // "Reference __________" → "reference" (matched before "Ac Reference" in column order)
