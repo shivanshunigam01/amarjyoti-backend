@@ -44,6 +44,8 @@ app.get('/api/v1/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+
+//kishan was here
 app.use('/api/v1/auth', require('./routes/authRoutes'));
 app.use('/api/v1/billing', require('./routes/billingRoutes'));
 app.use('/api/v1/payments', require('./routes/paymentRoutes'));
