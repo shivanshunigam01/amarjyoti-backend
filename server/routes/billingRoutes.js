@@ -135,12 +135,20 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
    * deliberately NOT matching "customerphone".
    */
   const getValue = (row, hints) => {
+    let firstMatch = '';
     for (const key of Object.keys(row)) {
       if (key.startsWith('__EMPTY')) continue;
       const n = normalize(key);
-      if (hints.some((h) => n.includes(h))) return row[key];
+      if (!hints.some((h) => n.includes(h))) continue;
+
+      const value = row[key];
+      const asText = String(value ?? '').trim();
+
+      // Prefer non-empty value across matching columns.
+      if (asText !== '') return value;
+      if (firstMatch === '') firstMatch = value;
     }
-    return '';
+    return firstMatch;
   };
 
   // RO: strip everything non-alphanumeric, uppercase → "R202601187"
@@ -148,18 +156,19 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   const parseNumber = (val) => Number(String(val || '').replace(/[^0-9.]/g, '')) || 0;
   const cleanText   = (val) => String(val || '').trim().toUpperCase();
   const parseSheetDate = (val) => {
-    if (!val) return new Date();
+    if (!val) return null;
     if (val instanceof Date && !Number.isNaN(val.getTime())) return val;
 
     const raw = String(val).trim();
-    if (!raw) return new Date();
+    if (!raw) return null;
 
     // Handles Excel serial dates if they come through as numbers.
     const asNum = Number(raw);
     if (!Number.isNaN(asNum) && asNum > 1000) {
       const excelEpoch = new Date(Date.UTC(1899, 11, 30));
       const ms = asNum * 24 * 60 * 60 * 1000;
-      return new Date(excelEpoch.getTime() + ms);
+      const d = new Date(excelEpoch.getTime() + ms);
+      return Number.isNaN(d.getTime()) ? null : d;
     }
 
     // Common dd/mm/yyyy or dd-mm-yyyy formats.
@@ -174,7 +183,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     }
 
     const fallback = new Date(raw);
-    return Number.isNaN(fallback.getTime()) ? new Date() : fallback;
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
   };
 
   // Specific RO hints — avoids false match on "Approval Date" ("approvaldate" ⊃ "ro")
@@ -271,8 +280,19 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       getValue(row, ['amount', 'amt', 'amountpaid', 'paidamt'])
     );
 
+    const approvalDateRaw = getValue(row, ['approvaldate', 'approvaldt', 'approvedate']);
+    const approvalDate = parseSheetDate(approvalDateRaw);
+
     if (paid_amt <= 0) {
       notFound.push({ row: rowNo, ro_no, reason: 'Invalid or zero payment amount' });
+      continue;
+    }
+    if (!approvalDate) {
+      notFound.push({
+        row: rowNo,
+        ro_no,
+        reason: 'Approval Date missing/invalid (payment date must come from sheet)',
+      });
       continue;
     }
 
@@ -288,11 +308,8 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       getValue(row, ['reference', 'refno', 'txnid', 'utr', 'acreference']) || ''
     ).trim();
 
-    const approvalDateRaw = getValue(row, ['approvaldate', 'approvaldt', 'approvedate']);
-    const approvalDate = parseSheetDate(approvalDateRaw);
-
     const mrNo = String(
-      getValue(row, ['mrno', 'mrnumber', 'mr_no']) || ''
+      getValue(row, ['mrno', 'mrnumber', 'mrnum', 'manualreceiptno', 'receiptno']) || ''
     ).trim();
 
     // "Customer namne __________" → normalised "customernamne", hint "customerna"
@@ -349,7 +366,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
         amount:       paid_amt,
         payment_date: approvalDate,
         reference_no: reference || '',
-        mr_no:        mrNo || '',
+        ...(mrNo ? { mr_no: mrNo } : {}),
       });
     } else {
       // CASH and CUSTOMER both go to customer fields
@@ -362,7 +379,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
         amount_paid:  paid_amt,
         payment_date: approvalDate,
         txn_id:       reference || '',
-        mr_no:        mrNo || '',
+        ...(mrNo ? { mr_no: mrNo } : {}),
       });
     }
 
@@ -405,7 +422,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     if (acc.customerPaid > 0) {
       incOp.customer_amount_paid  = acc.customerPaid;
       setOp.customer_payment_mode = acc.customerMode || 'CASH';
-      setOp.customer_payment_date = acc.customerDate || new Date();
+      setOp.customer_payment_date = acc.customerDate || null;
       if (acc.customerRef) setOp.customer_txn_id = acc.customerRef;
 
       // Append one history entry per payment row from sheet.
@@ -418,7 +435,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       incOp.insurance_amount          = acc.insurancePaid;
       setOp.insurance_applicable      = true;
       setOp.insurance_company         = acc.insuranceCompany;
-      setOp.insurance_payment_date    = acc.insuranceDate || new Date();
+      setOp.insurance_payment_date    = acc.insuranceDate || null;
       if (acc.insuranceRef) setOp.insurance_reference_no = acc.insuranceRef;
 
       pushOp.insurance_payments = {
