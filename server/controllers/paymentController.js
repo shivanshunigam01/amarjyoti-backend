@@ -45,12 +45,14 @@ function formatPaymentResponse(record, payment) {
       amount_paid:  p.amount_paid || 0,
       payment_date: toISODate(p.payment_date),
       txn_id:       p.txn_id      || '',
+      mr_no:        p.mr_no       || '',
     })),
     insurance_payments: (payment.insurance_payments || []).map((p) => ({
       company:      p.company      || '',
       amount:       p.amount       || 0,
       payment_date: toISODate(p.payment_date),
       reference_no: p.reference_no || '',
+      mr_no:        p.mr_no        || '',
     })),
   };
 }
