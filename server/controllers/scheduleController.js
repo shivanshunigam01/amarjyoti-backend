@@ -2,6 +2,7 @@
 const Schedule = require('../models/Schedule');
 const Billing = require('../models/BillingRecord');
 const Payment = require('../models/Payment');
+const { computePaymentStatus } = require('../utils/payment');
 
 // GET /api/v1/schedules
 exports.getSchedules = async (req, res) => {
@@ -17,7 +18,7 @@ exports.getSchedules = async (req, res) => {
       const totalAmt = billing?.total_amt || 0;
       const customerPaid = payment?.customer_amount_paid || 0;
       const insurancePaid = payment?.insurance_amount || 0;
-      const pendingAmount = totalAmt - customerPaid - insurancePaid;
+      const summary = computePaymentStatus(totalAmt, customerPaid, insurancePaid);
 
       return {
         id: s._id,
@@ -25,7 +26,11 @@ exports.getSchedules = async (req, res) => {
         branch: s.branch,
         customer_name: billing?.customer_name || 'Unknown',
         total_amt: totalAmt,
-        pending_amount: Math.max(0, pendingAmount),
+        pending_amount: summary.balance,
+        ins_comp_name: billing?.ins_comp_name || 'No Insurance Claim',
+        insurance_amount: insurancePaid,
+        customer_amount_paid: customerPaid,
+        total_collected: summary.total_collected,
         deadline: s.deadline,
         priority: s.priority,
         notes: s.notes,

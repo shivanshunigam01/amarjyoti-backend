@@ -14,10 +14,16 @@ npm run dev
 
 ## Default Users
 
-- `admin1 / admin123`
-- `staff1 / staff123`
-- `admin2 / admin123`
-- `staff2 / staff123`
+Branches: **branch1** = BR401 - KIA Bhootnath, **branch2** = BR201 - KIA Kurji.
+
+- `admin1 / admin123` — admin, branch1
+- `staff1 / staff123` — staff, branch1
+- `admin2 / admin123` — admin, branch2
+- `staff2 / staff123` — staff, branch2
+
+The frontend also supports **GM** and **MD** logins (`gm` / `md` with the same password as the branch admins, typically `admin123`): they are not separate DB users; the app signs in with both branch admin tokens for an all-branches view (same as the former head-officer flow).
+
+After changing seed data, run `npm run seed` again to refresh users (this clears and re-creates users).
 
 ## API Base URL
 

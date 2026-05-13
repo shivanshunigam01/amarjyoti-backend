@@ -12,6 +12,10 @@ const BillingRecordSchema = new mongoose.Schema(
     ro_date: { type: Date, default: null },
     service_advisor: { type: String, default: '', trim: true },
     total_amt: { type: Number, required: true, min: 0 },
+    /** Portion of total_amt billed to insurance (optional; from upload or manual entry). */
+    insurance_bill_amount: { type: Number, min: 0 },
+    /** Portion of total_amt payable by customer (optional; from upload or manual entry). */
+    customer_bill_amount: { type: Number, min: 0 },
     ins_comp_name: { type: String, default: 'No Insurance Claim', trim: true },
     branch: { type: String, enum: ['branch1', 'branch2'], required: true },
      paid_amount: { type: Number, default: 0 },

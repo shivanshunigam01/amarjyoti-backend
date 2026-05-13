@@ -1,6 +1,7 @@
 const XLSX = require('xlsx');
 const BillingRecord = require('../models/BillingRecord');
 const Payment = require('../models/Payment');
+const Schedule = require('../models/Schedule');
 const catchAsync = require('../utils/catchAsync');
 const AppError = require('../utils/appError');
 const { parseExcelDate, toISODate } = require('../utils/date');
@@ -125,6 +126,12 @@ exports.uploadBilling = catchAsync(async (req, res) => {
   const parseNumber = (val) =>
     Number(String(val || '').replace(/,/g, '')) || 0;
 
+  const parseOptionalAmount = (val) => {
+    if (val === undefined || val === null || String(val).trim() === '') return undefined;
+    const n = parseNumber(val);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
   // 🔥 DEBUG (run once)
   console.log("BILLING HEADERS:", Object.keys(rows[0]));
 
@@ -133,7 +140,14 @@ exports.uploadBilling = catchAsync(async (req, res) => {
     const roRaw = String(row['RO No'] || '').trim();
     const ro_no = cleanRO(roRaw);
 
-    return {
+    const insBill = parseOptionalAmount(
+      row['Insurance Bill Amt'] ?? row['Insurance Bill Amount'] ?? row['Insurance bill amt'],
+    );
+    const custBill = parseOptionalAmount(
+      row['Customer Bill Amt'] ?? row['Customer Bill Amount'] ?? row['Customer bill amt'],
+    );
+
+    const doc = {
       ro_no,
       bill_no: String(row['Bill No'] || 'UNKNOWN').trim(),
       bill_date: parseDate(row['Bill Date']),
@@ -153,6 +167,9 @@ exports.uploadBilling = catchAsync(async (req, res) => {
         'No Insurance Claim',
       branch,
     };
+    if (insBill !== undefined) doc.insurance_bill_amount = insBill;
+    if (custBill !== undefined) doc.customer_bill_amount = custBill;
+    return doc;
   });
 
   // 🔥 REMOVE EMPTY RO
@@ -272,10 +289,20 @@ exports.listRecords = catchAsync(async (req, res) => {
       service_advisor: record.service_advisor,
       total_amt: record.total_amt,
       ins_comp_name: record.ins_comp_name,
+      insurance_bill_amount:
+        record.insurance_bill_amount !== undefined && record.insurance_bill_amount !== null
+          ? Number(record.insurance_bill_amount)
+          : null,
+      customer_bill_amount:
+        record.customer_bill_amount !== undefined && record.customer_bill_amount !== null
+          ? Number(record.customer_bill_amount)
+          : null,
       branch: record.branch,
       payment_status: summary.status,
       total_collected: summary.total_collected,
       balance: summary.balance,
+      customer_amount_paid: payment?.customer_amount_paid || 0,
+      insurance_amount: payment?.insurance_amount || 0,
       created_at: record.createdAt,
       updated_at: record.updatedAt,
     };
@@ -319,6 +346,14 @@ exports.getRecord = catchAsync(async (req, res) => {
       service_advisor: record.service_advisor,
       total_amt: record.total_amt,
       ins_comp_name: record.ins_comp_name,
+      insurance_bill_amount:
+        record.insurance_bill_amount !== undefined && record.insurance_bill_amount !== null
+          ? Number(record.insurance_bill_amount)
+          : null,
+      customer_bill_amount:
+        record.customer_bill_amount !== undefined && record.customer_bill_amount !== null
+          ? Number(record.customer_bill_amount)
+          : null,
       branch: record.branch,
       created_at: record.createdAt,
     },
@@ -358,9 +393,10 @@ exports.getRecord = catchAsync(async (req, res) => {
 });
 
 exports.clearAll = catchAsync(async (req, res) => {
-  const [deletedRecords, deletedPayments] = await Promise.all([
+  const [deletedRecords, deletedPayments, deletedSchedules] = await Promise.all([
     BillingRecord.deleteMany(req.branchFilter),
     Payment.deleteMany(req.branchFilter),
+    Schedule.deleteMany(req.branchFilter),
   ]);
 
   res.status(200).json({
@@ -368,5 +404,6 @@ exports.clearAll = catchAsync(async (req, res) => {
     message: `All records cleared for ${req.user.branch}`,
     deleted_records: deletedRecords.deletedCount,
     deleted_payments: deletedPayments.deletedCount,
+    deleted_schedules: deletedSchedules.deletedCount,
   });
 });

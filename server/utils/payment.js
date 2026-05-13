@@ -3,7 +3,8 @@ function computePaymentStatus(totalAmount, customerAmount, insuranceAmount) {
   const rawCollected   = Number(customerAmount || 0) + Number(insuranceAmount || 0);
   // Never let collected exceed the billed amount (prevents dashboard totals from
   // inflating when the same payment sheet is uploaded more than once).
-  const totalCollected = billed > 0 ? Math.min(rawCollected, billed) : rawCollected;
+  // Zero-billed rows must not add raw payment amounts into KPI totals.
+  const totalCollected = billed > 0 ? Math.min(rawCollected, billed) : 0;
   const balance        = Math.max(billed - totalCollected, 0);
 
   let status = 'Pending';

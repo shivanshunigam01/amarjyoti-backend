@@ -19,6 +19,13 @@ async function getOrCreatePayment(ro_no, branch) {
   return payment;
 }
 
+/** Date for a new installment; empty/invalid body → server now (avoids reusing stale UI dates). */
+function parseInstallmentDate(value) {
+  if (value === undefined || value === null || value === '') return new Date();
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
 function formatPaymentResponse(record, payment) {
   const summary = computePaymentStatus(record.total_amt, payment.customer_amount_paid, payment.insurance_amount);
   return {
@@ -80,9 +87,7 @@ exports.savePayment = catchAsync(async (req, res) => {
     payment.customer_payments.push({
       mode:         req.body.customer_payment_mode || '',
       amount_paid:  custDelta,
-      payment_date: req.body.customer_payment_date
-        ? new Date(req.body.customer_payment_date)
-        : new Date(),
+      payment_date: parseInstallmentDate(req.body.customer_payment_date),
       txn_id: req.body.customer_txn_id || '',
     });
   }
@@ -91,9 +96,7 @@ exports.savePayment = catchAsync(async (req, res) => {
     payment.insurance_payments.push({
       company:      req.body.insurance_company      || '',
       amount:       insDelta,
-      payment_date: req.body.insurance_payment_date
-        ? new Date(req.body.insurance_payment_date)
-        : new Date(),
+      payment_date: parseInstallmentDate(req.body.insurance_payment_date),
       reference_no: req.body.insurance_reference_no || '',
     });
   }
@@ -101,15 +104,23 @@ exports.savePayment = catchAsync(async (req, res) => {
   // Update flat totals and metadata (backward-compatible fields)
   payment.customer_payment_mode  = req.body.customer_payment_mode || '';
   payment.customer_amount_paid   = newCustTotal;
-  payment.customer_payment_date  = req.body.customer_payment_date || null;
   payment.customer_txn_id        = req.body.customer_txn_id       || '';
+  // Only move "latest" customer date when a new installment was added (avoid stale form overwriting history)
+  if (custDelta > 0 && payment.customer_payments.length) {
+    payment.customer_payment_date =
+      payment.customer_payments[payment.customer_payments.length - 1].payment_date;
+  }
 
   payment.insurance_applicable   = Boolean(req.body.insurance_applicable);
   payment.insurance_company      = req.body.insurance_company      || '';
   payment.insurance_amount       = newInsTotal;
-  payment.insurance_payment_date = req.body.insurance_payment_date || null;
   payment.insurance_reference_no = req.body.insurance_reference_no || '';
-  payment.notes                  = req.body.notes                  || '';
+  if (insDelta > 0 && req.body.insurance_applicable && payment.insurance_payments.length) {
+    payment.insurance_payment_date =
+      payment.insurance_payments[payment.insurance_payments.length - 1].payment_date;
+  }
+
+  payment.notes = req.body.notes || '';
 
   await payment.save();
   const response = formatPaymentResponse(record, payment);
