@@ -135,18 +135,56 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
    * deliberately NOT matching "customerphone".
    */
   const getValue = (row, hints) => {
+    let firstMatch = '';
     for (const key of Object.keys(row)) {
       if (key.startsWith('__EMPTY')) continue;
       const n = normalize(key);
-      if (hints.some((h) => n.includes(h))) return row[key];
+      if (!hints.some((h) => n.includes(h))) continue;
+
+      const value = row[key];
+      const asText = String(value ?? '').trim();
+
+      // Prefer non-empty value across matching columns.
+      if (asText !== '') return value;
+      if (firstMatch === '') firstMatch = value;
     }
-    return '';
+    return firstMatch;
   };
 
   // RO: strip everything non-alphanumeric, uppercase → "R202601187"
   const cleanRO     = (val) => String(val || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const parseNumber = (val) => Number(String(val || '').replace(/[^0-9.]/g, '')) || 0;
   const cleanText   = (val) => String(val || '').trim().toUpperCase();
+  const parseSheetDate = (val) => {
+    if (!val) return null;
+    if (val instanceof Date && !Number.isNaN(val.getTime())) return val;
+
+    const raw = String(val).trim();
+    if (!raw) return null;
+
+    // Handles Excel serial dates if they come through as numbers.
+    const asNum = Number(raw);
+    if (!Number.isNaN(asNum) && asNum > 1000) {
+      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+      const ms = asNum * 24 * 60 * 60 * 1000;
+      const d = new Date(excelEpoch.getTime() + ms);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    // Common dd/mm/yyyy or dd-mm-yyyy formats.
+    const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const dd = Number(m[1]);
+      const mm = Number(m[2]) - 1;
+      let yy = Number(m[3]);
+      if (yy < 100) yy += 2000;
+      const d = new Date(yy, mm, dd);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+
+    const fallback = new Date(raw);
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
+  };
 
   // Specific RO hints — avoids false match on "Approval Date" ("approvaldate" ⊃ "ro")
   const RO_VALUE_HINTS = ['ronumber', 'rono'];
@@ -210,12 +248,16 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
   // acc shape per ro_no:
   //   record            — BillingRecord document from DB
   //   customerPaid      — total customer payment amount from this sheet
-  //   customerMode      — last non-empty customer payment method
-  //   customerRef       — last non-empty customer reference / txn id
+  //   customerMode      — latest non-empty customer payment method
+  //   customerRef       — latest non-empty customer reference / txn id
+  //   customerDate      — latest customer approval date
+  //   customerEntries   — all customer history entries from this upload
   //   insurancePaid     — total insurance payment amount from this sheet
-  //   insuranceMode     — last non-empty insurance payment method
-  //   insuranceRef      — last non-empty insurance reference number
+  //   insuranceMode     — latest non-empty insurance payment method
+  //   insuranceRef      — latest non-empty insurance reference number
+  //   insuranceDate     — latest insurance approval date
   //   insuranceCompany  — matched insurance company name from DB
+  //   insuranceEntries  — all insurance history entries from this upload
 
   const perRO     = new Map();
   const notFound  = [];
@@ -238,8 +280,19 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       getValue(row, ['amount', 'amt', 'amountpaid', 'paidamt'])
     );
 
+    const approvalDateRaw = getValue(row, ['approvaldate', 'approvaldt', 'approvedate']);
+    const approvalDate = parseSheetDate(approvalDateRaw);
+
     if (paid_amt <= 0) {
       notFound.push({ row: rowNo, ro_no, reason: 'Invalid or zero payment amount' });
+      continue;
+    }
+    if (!approvalDate) {
+      notFound.push({
+        row: rowNo,
+        ro_no,
+        reason: 'Approval Date missing/invalid (payment date must come from sheet)',
+      });
       continue;
     }
 
@@ -255,6 +308,10 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       getValue(row, ['reference', 'refno', 'txnid', 'utr', 'acreference']) || ''
     ).trim();
 
+    const mrNo = String(
+      getValue(row, ['mrno', 'mrnumber', 'mrnum', 'manualreceiptno', 'receiptno']) || ''
+    ).trim();
+
     // "Customer namne __________" → normalised "customernamne", hint "customerna"
     // covers both correct spelling and the typo without matching "customerphone"
     const customerName = String(
@@ -267,7 +324,7 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       continue;
     }
 
-    console.log(`[upload-payments] Row ${rowNo}: ro_no=${ro_no} | amt=${paid_amt} | mode="${payment_mode}" | ref="${reference}" | custName="${customerName}" | dbMatch=${!!record}`);
+    console.log(`[upload-payments] Row ${rowNo}: ro_no=${ro_no} | amt=${paid_amt} | mode="${payment_mode}" | ref="${reference}" | mr_no="${mrNo}" | approval_date="${approvalDate.toISOString()}" | custName="${customerName}" | dbMatch=${!!record}`);
 
     // ── Classify payment type ────────────────────────────────────────────
     let paymentType      = 'CUSTOMER';
@@ -291,8 +348,8 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     if (!perRO.has(ro_no)) {
       perRO.set(ro_no, {
         record,
-        customerPaid: 0, customerMode: '', customerRef: '',
-        insurancePaid: 0, insuranceMode: '', insuranceRef: '', insuranceCompany: '',
+        customerPaid: 0, customerMode: '', customerRef: '', customerDate: null, customerEntries: [],
+        insurancePaid: 0, insuranceMode: '', insuranceRef: '', insuranceDate: null, insuranceCompany: '', insuranceEntries: [],
       });
     }
 
@@ -303,11 +360,27 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       acc.insuranceMode     = payment_mode  || acc.insuranceMode;
       acc.insuranceRef      = reference     || acc.insuranceRef;
       acc.insuranceCompany  = matchedInsCompany;
+      acc.insuranceDate     = approvalDate;
+      acc.insuranceEntries.push({
+        company:      matchedInsCompany || '',
+        amount:       paid_amt,
+        payment_date: approvalDate,
+        reference_no: reference || '',
+        ...(mrNo ? { mr_no: mrNo } : {}),
+      });
     } else {
       // CASH and CUSTOMER both go to customer fields
       acc.customerPaid += paid_amt;
       acc.customerMode  = payment_mode || acc.customerMode;
       acc.customerRef   = reference    || acc.customerRef;
+      acc.customerDate  = approvalDate;
+      acc.customerEntries.push({
+        mode:         payment_mode || 'CASH',
+        amount_paid:  paid_amt,
+        payment_date: approvalDate,
+        txn_id:       reference || '',
+        ...(mrNo ? { mr_no: mrNo } : {}),
+      });
     }
 
     processed.push({ row: rowNo, ro_no, paid_amt, type: paymentType });
@@ -346,22 +419,15 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
     const incOp  = {};
     const setOp  = {};
     const pushOp = {};
-    const now    = new Date();
-
     if (acc.customerPaid > 0) {
       incOp.customer_amount_paid  = acc.customerPaid;
       setOp.customer_payment_mode = acc.customerMode || 'CASH';
-      setOp.customer_payment_date = now;
+      setOp.customer_payment_date = acc.customerDate || null;
       if (acc.customerRef) setOp.customer_txn_id = acc.customerRef;
 
-      // Append one history entry per RO per upload batch
+      // Append one history entry per payment row from sheet.
       pushOp.customer_payments = {
-        $each: [{
-          mode:         acc.customerMode || 'CASH',
-          amount_paid:  acc.customerPaid,
-          payment_date: now,
-          txn_id:       acc.customerRef || '',
-        }],
+        $each: acc.customerEntries,
       };
     }
 
@@ -369,16 +435,11 @@ const uploadPaymentSheet = catchAsync(async (req, res) => {
       incOp.insurance_amount          = acc.insurancePaid;
       setOp.insurance_applicable      = true;
       setOp.insurance_company         = acc.insuranceCompany;
-      setOp.insurance_payment_date    = now;
+      setOp.insurance_payment_date    = acc.insuranceDate || null;
       if (acc.insuranceRef) setOp.insurance_reference_no = acc.insuranceRef;
 
       pushOp.insurance_payments = {
-        $each: [{
-          company:      acc.insuranceCompany || '',
-          amount:       acc.insurancePaid,
-          payment_date: now,
-          reference_no: acc.insuranceRef || '',
-        }],
+        $each: acc.insuranceEntries,
       };
     }
 

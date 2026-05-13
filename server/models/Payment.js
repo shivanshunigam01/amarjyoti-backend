@@ -8,6 +8,7 @@ const CustomerPaymentEntrySchema = new mongoose.Schema(
     amount_paid:  { type: Number, default: 0,  min: 0 },
     payment_date: { type: Date,   default: null },
     txn_id:       { type: String, default: '', trim: true },
+    mr_no:        { type: String, default: '', trim: true },
   },
   { _id: false }
 );
@@ -18,6 +19,7 @@ const InsurancePaymentEntrySchema = new mongoose.Schema(
     amount:       { type: Number, default: 0,  min: 0 },
     payment_date: { type: Date,   default: null },
     reference_no: { type: String, default: '', trim: true },
+    mr_no:        { type: String, default: '', trim: true },
   },
   { _id: false }
 );
